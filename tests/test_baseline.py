@@ -1,5 +1,7 @@
 import hashlib
+import sqlite3
 import statistics
+import threading
 from pathlib import Path
 
 import pytest
@@ -809,6 +811,7 @@ def test_validation_failure_preserves_existing_findings(client, paths):
 
     assert client.get(f"/cases/{case['id']}/findings").json()["findings"] == after
 
+
 def test_missing_values_rejected(client):
     case = create_case(client, "validation-missing-values")
     upload_csv(
@@ -821,3 +824,384 @@ def test_missing_values_rejected(client):
     missing_values = client.post(f"/cases/{case['id']}/analyze")
     assert missing_values.status_code == 422
     assert missing_values.json()["detail"]["validation_error"] == "missing_required_values"
+
+
+def test_audit_chain_covers_case_evidence_custody_and_integrity_failure(client, paths):
+    case = create_case(client, "audit-complete")
+    evidence = upload_csv(
+        client,
+        case["id"],
+        "audit.csv",
+        "timestamp,source_ip,event_type,resource,status,bytes\n"
+        "2026-01-01 00:00:00,10.0.0.1,GET,/ok,200,100\n",
+    )
+
+    custody = client.post(
+        f"/evidence/{evidence['id']}/chain-of-custody",
+        json={"person": "Examiner", "action": "Reviewed", "remarks": "Audit verification"},
+    )
+    assert custody.status_code == 200
+
+    analysis = client.post(f"/cases/{case['id']}/analyze")
+    assert analysis.status_code == 200
+
+    original, _, _ = get_isolated_stored_paths(paths, evidence["evidence_id"])
+    original.write_bytes(b"tampered")
+    integrity = client.post(f"/cases/{case['id']}/analyze")
+    assert integrity.status_code == 409
+
+    connection = sqlite3.connect(paths["db"])
+    connection.row_factory = sqlite3.Row
+    rows = connection.execute(
+        "SELECT action_type, outcome FROM audit_events ORDER BY id ASC"
+    ).fetchall()
+    connection.close()
+
+    action_types = {row["action_type"] for row in rows}
+    assert "CASE_CREATED" in action_types
+    assert "EVIDENCE_INGESTED" in action_types
+    assert "CHAIN_OF_CUSTODY_UPDATED" in action_types
+    assert "ANALYSIS_COMPLETED" in action_types
+    assert "EVIDENCE_INTEGRITY_FAILED" in action_types
+
+    history = client.get("/audit/verify")
+    assert history.status_code == 200
+    assert history.json()["valid"] is True
+
+
+def test_audit_chain_detects_modification_delete_and_reorder(client, paths):
+    case = create_case(client, "audit-tamper")
+    upload_csv(
+        client,
+        case["id"],
+        "audit-tamper.csv",
+        "timestamp,source_ip,event_type,resource,status,bytes\n"
+        "2026-01-01 00:00:00,10.0.0.1,GET,/ok,200,100\n",
+    )
+
+    connection = sqlite3.connect(paths["db"])
+    connection.execute("DROP TRIGGER IF EXISTS prevent_audit_update")
+    connection.execute("DROP TRIGGER IF EXISTS prevent_audit_delete")
+    connection.execute("UPDATE audit_events SET outcome = 'MODIFIED' WHERE id = 1")
+    connection.commit()
+
+    from backend.audit import verify_audit_chain
+    result = verify_audit_chain(connection)
+    connection.close()
+    assert result["valid"] is False
+
+    protected = sqlite3.connect(paths["db"])
+    protected.execute(
+        "CREATE TRIGGER prevent_audit_update BEFORE UPDATE ON audit_events BEGIN SELECT RAISE(ABORT, 'read-only'); END"
+    )
+    protected.execute(
+        "CREATE TRIGGER prevent_audit_delete BEFORE DELETE ON audit_events BEGIN SELECT RAISE(ABORT, 'read-only'); END"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        protected.execute("DELETE FROM audit_events")
+        protected.commit()
+    protected.close()
+
+
+def test_audit_append_is_concurrent_and_transaction_consistent(paths):
+    from backend.audit import append_audit_event, verify_audit_chain
+
+    def worker(index):
+        connection = sqlite3.connect(paths["db"])
+        connection.row_factory = sqlite3.Row
+        append_audit_event(
+            connection,
+            action_type="CONCURRENT_TEST",
+            case_id=index,
+            evidence_id=None,
+            outcome="SUCCESS",
+            metadata={"index": index},
+        )
+        connection.close()
+
+    threads = [threading.Thread(target=worker, args=(index,)) for index in range(20)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    connection = sqlite3.connect(paths["db"])
+    connection.row_factory = sqlite3.Row
+    result = verify_audit_chain(connection)
+    count = connection.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0]
+    connection.close()
+
+    assert result["valid"] is True
+    assert count == 20
+
+
+def test_audit_history_case_and_evidence_filters(client):
+    case = create_case(client, "audit-filters")
+    evidence = upload_csv(
+        client,
+        case["id"],
+        "audit-filter.csv",
+        "timestamp,source_ip,event_type,resource,status,bytes\n"
+        "2026-01-01 00:00:00,10.0.0.1,GET,/ok,200,100\n",
+    )
+    custody = client.post(
+        f"/evidence/{evidence['id']}/chain-of-custody",
+        json={"person": "Filter Examiner", "action": "Reviewed", "remarks": "Filter test"},
+    )
+    assert custody.status_code == 200
+
+    case_history = client.get("/audit", params={"case_id": case["id"]})
+    assert case_history.status_code == 200
+    case_records = case_history.json()["history"]
+    assert case_records
+    assert all(record["case_id"] == case["id"] for record in case_records)
+
+    evidence_history = client.get("/audit", params={"evidence_id": evidence["evidence_id"]})
+    assert evidence_history.status_code == 200
+    evidence_records = evidence_history.json()["history"]
+    assert evidence_records
+    assert all(record["evidence_id"] == evidence["evidence_id"] for record in evidence_records)
+
+
+def test_evidence_validation_failure_audit_event(client, paths):
+    case = create_case(client, "audit-validation")
+    evidence = upload_csv(
+        client,
+        case["id"],
+        "audit-validation.txt",
+        "timestamp,source_ip,event_type,resource,status,bytes\n",
+    )
+
+    response = client.post(f"/cases/{case['id']}/analyze")
+    assert response.status_code == 422
+
+    connection = sqlite3.connect(paths["db"])
+    connection.row_factory = sqlite3.Row
+    row = connection.execute(
+        "SELECT action_type, outcome, case_id, evidence_id FROM audit_events "
+        "WHERE action_type = 'EVIDENCE_VALIDATION_FAILED' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    connection.close()
+
+    assert row is not None
+    assert row["outcome"] == "FAILURE"
+    assert row["case_id"] == case["id"]
+    assert row["evidence_id"] == evidence["evidence_id"]
+
+
+def test_successful_and_failed_report_audit_events(client, paths):
+    case = create_case(client, "audit-report")
+    upload_csv(
+        client,
+        case["id"],
+        "audit-report.csv",
+        "timestamp,source_ip,event_type,resource,status,bytes\n"
+        "2026-01-01 00:00:00,10.0.0.1,GET,/ok,200,100\n",
+    )
+
+    success = client.post(f"/cases/{case['id']}/report")
+    assert success.status_code == 200
+
+    failed = client.post("/cases/999999/report")
+    assert failed.status_code == 500
+
+    connection = sqlite3.connect(paths["db"])
+    connection.row_factory = sqlite3.Row
+    actions = {
+        row["action_type"]: row["outcome"]
+        for row in connection.execute(
+            "SELECT action_type, outcome FROM audit_events "
+            "WHERE action_type IN ('REPORT_GENERATED', 'REPORT_GENERATION_FAILED') "
+            "ORDER BY id ASC"
+        ).fetchall()
+    }
+    connection.close()
+
+    assert actions["REPORT_GENERATED"] == "SUCCESS"
+    assert actions["REPORT_GENERATION_FAILED"] == "FAILURE"
+
+
+def test_audit_chain_detects_internal_deletion(client, paths):
+    case = create_case(client, "audit-delete")
+    upload_csv(
+        client,
+        case["id"],
+        "audit-delete.csv",
+        "timestamp,source_ip,event_type,resource,status,bytes\n"
+        "2026-01-01 00:00:00,10.0.0.1,GET,/ok,200,100\n",
+    )
+
+    connection = sqlite3.connect(paths["db"])
+    connection.row_factory = sqlite3.Row
+    rows = connection.execute("SELECT id FROM audit_events ORDER BY id ASC").fetchall()
+    assert len(rows) >= 2
+
+    connection.execute("DROP TRIGGER IF EXISTS prevent_audit_delete")
+    connection.execute("DELETE FROM audit_events WHERE id = ?", (rows[0]["id"],))
+    connection.commit()
+
+    from backend.audit import verify_audit_chain
+    result = verify_audit_chain(connection)
+    connection.close()
+
+    assert result["valid"] is False
+
+
+def test_audit_chain_detects_reordering(client, paths):
+    case = create_case(client, "audit-reorder")
+    evidence = upload_csv(
+        client,
+        case["id"],
+        "audit-reorder.csv",
+        "timestamp,source_ip,event_type,resource,status,bytes\n"
+        "2026-01-01 00:00:00,10.0.0.1,GET,/ok,200,100\n",
+    )
+    assert evidence["evidence_id"]
+
+    connection = sqlite3.connect(paths["db"])
+    connection.row_factory = sqlite3.Row
+    rows = connection.execute(
+        "SELECT id, event_id FROM audit_events ORDER BY id ASC"
+    ).fetchall()
+    assert len(rows) >= 2
+
+    first_id = rows[0]["id"]
+    first_event = rows[0]["event_id"]
+    second_id = rows[1]["id"]
+    second_event = rows[1]["event_id"]
+
+    connection.execute("DROP TRIGGER IF EXISTS prevent_audit_update")
+    temporary_event = "AUD-TEMPORARY-REORDER"
+    connection.execute("UPDATE audit_events SET event_id = ? WHERE id = ?", (temporary_event, first_id))
+    connection.execute("UPDATE audit_events SET event_id = ? WHERE id = ?", (first_event, second_id))
+    connection.execute("UPDATE audit_events SET event_id = ? WHERE id = ?", (second_event, first_id))
+    connection.commit()
+
+    from backend.audit import verify_audit_chain
+    result = verify_audit_chain(connection)
+    connection.close()
+
+    assert result["valid"] is False
+
+
+def test_caller_transaction_rollback_removes_successful_audit_entry(paths):
+    from backend.audit import append_audit_event, verify_audit_chain
+
+    connection = sqlite3.connect(paths["db"])
+    connection.row_factory = sqlite3.Row
+    connection.execute("BEGIN")
+    append_audit_event(
+        connection,
+        action_type="ROLLBACK_TEST",
+        case_id=123,
+        evidence_id="EV-ROLLBACK",
+        outcome="SUCCESS",
+        metadata={"test": True},
+    )
+    connection.rollback()
+
+    count = connection.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0]
+    result = verify_audit_chain(connection)
+    connection.close()
+
+    assert count == 0
+    assert result["valid"] is True
+
+
+def test_mixed_concurrent_owned_and_caller_transactions(paths):
+    from backend.audit import append_audit_event, verify_audit_chain
+
+    def owned_worker(index):
+        connection = sqlite3.connect(paths["db"], timeout=10)
+        append_audit_event(
+            connection,
+            action_type="MIXED_OWNED",
+            case_id=index,
+            evidence_id=None,
+            outcome="SUCCESS",
+            metadata={"index": index},
+        )
+        connection.close()
+
+    def caller_worker(index):
+        connection = sqlite3.connect(paths["db"], timeout=30)
+        connection.execute("PRAGMA busy_timeout=30000")
+        for _ in range(20):
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                break
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower():
+                    raise
+        else:
+            connection.close()
+            return
+
+        append_audit_event(
+            connection,
+            action_type="MIXED_CALLER",
+            case_id=index,
+            evidence_id=None,
+            outcome="SUCCESS",
+            metadata={"index": index},
+        )
+        if index % 2:
+            connection.rollback()
+        else:
+            connection.commit()
+        connection.close()
+
+    threads = []
+    for index in range(10):
+        threads.append(threading.Thread(target=owned_worker, args=(index,)))
+        threads.append(threading.Thread(target=caller_worker, args=(index,)))
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    connection = sqlite3.connect(paths["db"])
+    connection.row_factory = sqlite3.Row
+    result = verify_audit_chain(connection)
+    count = connection.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0]
+    connection.close()
+
+    assert result["valid"] is True
+    assert count == 15
+
+
+def test_audit_schema_migration_for_preexisting_database():
+    from backend.audit import initialize_audit_table, append_audit_event, verify_audit_chain
+
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        """
+        CREATE TABLE audit_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT NOT NULL UNIQUE,
+            timestamp TEXT NOT NULL,
+            action_type TEXT NOT NULL,
+            outcome TEXT NOT NULL,
+            metadata TEXT NOT NULL,
+            previous_hash TEXT NOT NULL,
+            current_hash TEXT NOT NULL UNIQUE
+        )
+        """
+    )
+
+    initialize_audit_table(connection)
+    append_audit_event(
+        connection,
+        action_type="SCHEMA_COMPATIBILITY",
+        case_id=7,
+        evidence_id="EV-SCHEMA",
+        outcome="SUCCESS",
+        metadata={"migrated": True},
+    )
+    result = verify_audit_chain(connection)
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(audit_events)").fetchall()}
+    connection.close()
+
+    assert {"case_id", "evidence_id"}.issubset(columns)
+    assert result["valid"] is True

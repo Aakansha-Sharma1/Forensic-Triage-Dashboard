@@ -269,3 +269,13 @@ The following are in place for Phase 2 (Threat Detection):
 ## PHASE 1 STATUS: ✅ COMPLETE AND PRODUCTION-READY
 
 All acceptance criteria met. Ready to proceed to PHASE 2 — THREAT DETECTION.
+
+---
+
+## PHASE 1, STEP 5.1 — AUDIT TRAIL LIMITATIONS
+
+### Report filesystem/database atomicity
+
+Report generation is not an all-or-nothing transaction across the SQLite database and filesystem. The PDF artifact is created before the `REPORT_GENERATED` audit event is committed. The application can therefore record a database audit event for a report that is not present, or leave a report file present when a subsequent database audit write fails. Conversely, PDF creation failure is audited in SQLite only if the database remains available.
+
+The implementation does not assume that filesystem durability and SQLite transaction durability are jointly atomic. Integrity-gated report generation verifies evidence before artifact creation; successful report audit metadata includes the generated filename and SHA-256. Production deployments should retain database/filesystem backups and monitor audit-chain verification independently. No cross-filesystem two-phase commit or external timestamp authority is claimed.

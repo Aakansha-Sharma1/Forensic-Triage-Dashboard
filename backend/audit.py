@@ -62,6 +62,15 @@ def initialize_audit_table(connection) -> None:
         """
     )
 
+    existing_columns = {
+        row[1]: row[2]
+        for row in connection.execute("PRAGMA table_info(audit_events)").fetchall()
+    }
+    if "case_id" not in existing_columns:
+        connection.execute("ALTER TABLE audit_events ADD COLUMN case_id INTEGER")
+    if "evidence_id" not in existing_columns:
+        connection.execute("ALTER TABLE audit_events ADD COLUMN evidence_id TEXT")
+
 
 def append_audit_event(
     connection,
@@ -71,7 +80,9 @@ def append_audit_event(
     outcome: str,
     metadata: dict | None = None,
 ) -> dict:
-    with _AUDIT_LOCK:
+    owns_transaction = not connection.in_transaction
+
+    def append_record() -> dict:
         latest = connection.execute(
             "SELECT current_hash FROM audit_events ORDER BY id DESC LIMIT 1"
         ).fetchone()
@@ -105,7 +116,7 @@ def append_audit_event(
                 timestamp,
                 action_type,
                 case_id,
-                str(evidence_id) if evidence_id is not None else None,
+                normalized_evidence_id,
                 outcome,
                 metadata_text,
                 previous_hash,
@@ -118,15 +129,45 @@ def append_audit_event(
             "timestamp": timestamp,
             "action_type": action_type,
             "case_id": case_id,
-            "evidence_id": str(evidence_id) if evidence_id is not None else None,
+            "evidence_id": normalized_evidence_id,
             "outcome": outcome,
             "metadata": metadata_object,
             "previous_hash": previous_hash,
             "current_hash": current_hash,
         }
 
+    if owns_transaction:
+        with _AUDIT_LOCK:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                record = append_record()
+                connection.commit()
+                return record
+            except Exception:
+                connection.rollback()
+                raise
+
+    # Caller-owned transactions are already serialized by SQLite's transaction lock.
+    # Do not acquire _AUDIT_LOCK here: the caller may hold BEGIN IMMEDIATE while waiting
+    # for the lock, while a self-owned writer could hold _AUDIT_LOCK while waiting for SQLite.
+    try:
+        return append_record()
+    except Exception:
+        raise
+
+
+def _row_as_dict(row, column_names: tuple[str, ...]) -> dict:
+    """Convert sqlite3.Row or tuple results into a stable dictionary."""
+    if hasattr(row, "keys"):
+        return {column: row[column] for column in column_names}
+    return dict(zip(column_names, row))
+
 
 def verify_audit_chain(connection) -> dict:
+    column_names = (
+        "id", "event_id", "timestamp", "action_type", "case_id",
+        "evidence_id", "outcome", "metadata", "previous_hash", "current_hash",
+    )
     rows = connection.execute(
         "SELECT id, event_id, timestamp, action_type, case_id, evidence_id, outcome, metadata, previous_hash, current_hash "
         "FROM audit_events ORDER BY id ASC"
@@ -136,7 +177,7 @@ def verify_audit_chain(connection) -> dict:
     expected_previous = "0" * 64
 
     for row in rows:
-        record = dict(row)
+        record = _row_as_dict(row, column_names)
         try:
             metadata = json.loads(record["metadata"])
         except (json.JSONDecodeError, TypeError):
@@ -230,10 +271,14 @@ def get_audit_history(connection, case_id: int | None = None, evidence_id: int |
         query += " WHERE " + " AND ".join(clauses)
     query += " ORDER BY id ASC"
 
+    column_names = (
+        "id", "event_id", "timestamp", "action_type", "case_id",
+        "evidence_id", "outcome", "metadata", "previous_hash", "current_hash",
+    )
     rows = connection.execute(query, tuple(parameters)).fetchall()
     history = []
     for row in rows:
-        record = dict(row)
+        record = _row_as_dict(row, column_names)
         try:
             record["metadata"] = json.loads(record["metadata"])
         except (json.JSONDecodeError, TypeError):

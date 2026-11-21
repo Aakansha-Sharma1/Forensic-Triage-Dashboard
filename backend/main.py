@@ -22,7 +22,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, 
 from reportlab.lib import colors
 
 from .database import get_connection, initialize_database
-from .audit import append_audit_event, verify_audit_chain
+from .audit import append_audit_event, get_audit_history, verify_audit_chain
 
 
 initialize_database()
@@ -239,30 +239,39 @@ async def analyze_evidence(case_id: int):
 
             original_path = Path(stored_path)
             working_path = WORKING_DIR / f"{ev_code}_working.csv"
-            verify_evidence_integrity(ev_code, original_path, working_path, recorded_sha256)
-            validate_evidence_for_analysis(ev_code, file_type, working_path)
+            try:
+                verify_evidence_integrity(ev_code, original_path, working_path, recorded_sha256)
+                validate_evidence_for_analysis(ev_code, file_type, working_path)
+            except HTTPException as exc:
+                detail = exc.detail if isinstance(exc.detail, dict) else {"detail": exc.detail}
+                action = "EVIDENCE_INTEGRITY_FAILED" if "integrity_error" in detail else "EVIDENCE_VALIDATION_FAILED"
+                append_audit_event(
+                    connection,
+                    action_type=action,
+                    case_id=case_id,
+                    evidence_id=ev_code,
+                    outcome="FAILURE",
+                    metadata={"status_code": exc.status_code, "error": detail},
+                )
+                connection.commit()
+                raise
             verified_evidence.append((ev_id, ev_code, working_path))
 
         # Integrity passed. Existing findings may now be replaced by a successful analysis.
         connection.execute(
             "DELETE FROM findings WHERE evidence_id IN (SELECT id FROM evidence WHERE case_id = ?)",
-            (case_id,)
+            (case_id,),
         )
-        connection.commit()
 
         analysis_results = []
 
         # Process only integrity-verified evidence items.
         for ev_id, ev_code, working_path in verified_evidence:
-            # Detect threats
             findings = detect_threats(working_path, ev_id)
-            
-            # Store findings in database
             created_at = datetime.now(timezone.utc).isoformat()
-            
+
             for finding in findings:
                 finding_id = f"FD-{ev_id}-{uuid4().hex[:8].upper()}"
-                
                 connection.execute(
                     """
                     INSERT INTO findings (
@@ -285,35 +294,57 @@ async def analyze_evidence(case_id: int):
                     (
                         finding_id,
                         ev_id,
-                        finding.get('event_id'),
-                        finding.get('timestamp'),
-                        finding.get('source'),
-                        finding.get('event_type'),
-                        finding.get('resource'),
-                        finding.get('reason'),
-                        finding.get('severity'),
-                        finding.get('technical_observation'),
-                        finding.get('plain_language_explanation'),
-                        'Requires Review',
+                        finding.get("event_id"),
+                        finding.get("timestamp"),
+                        finding.get("source"),
+                        finding.get("event_type"),
+                        finding.get("resource"),
+                        finding.get("reason"),
+                        finding.get("severity"),
+                        finding.get("technical_observation"),
+                        finding.get("plain_language_explanation"),
+                        "Requires Review",
                         created_at,
                     ),
                 )
 
-                connection.commit()
-                
                 analysis_results.append({
-                    'finding_id': finding_id,
-                    'event_id': finding.get('event_id'),
-                    'severity': finding.get('severity'),
-                    'reason': finding.get('reason'),
+                    "finding_id": finding_id,
+                    "event_id": finding.get("event_id"),
+                    "severity": finding.get("severity"),
+                    "reason": finding.get("reason"),
                 })
-        
+
+        append_audit_event(
+            connection,
+            action_type="ANALYSIS_COMPLETED",
+            case_id=case_id,
+            evidence_id=None,
+            outcome="SUCCESS",
+            metadata={"findings_count": len(analysis_results)},
+        )
+        connection.commit()
+
         return {
             'message': 'Analysis complete',
             'findings_count': len(analysis_results),
             'findings': analysis_results
         }
-    
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        connection.rollback()
+        append_audit_event(
+            connection,
+            action_type="ANALYSIS_FAILED",
+            case_id=case_id,
+            evidence_id=None,
+            outcome="FAILURE",
+            metadata={"error": str(exc)},
+        )
+        connection.commit()
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {exc}")
     finally:
         connection.close()
 
@@ -1155,6 +1186,18 @@ def record_chain_of_custody(evidence_id: int, entry: ChainOfCustodyEntry):
         connection.close()
         raise HTTPException(status_code=404, detail="Evidence not found")
 
+    evidence_row = connection.execute(
+        "SELECT id, case_id, evidence_id FROM evidence WHERE id = ?",
+        (evidence_id,)
+    ).fetchone()
+
+    if not evidence_row:
+        connection.close()
+        raise HTTPException(status_code=404, detail="Evidence not found")
+
+    case_id = evidence_row["case_id"]
+    evidence_code = evidence_row["evidence_id"]
+
     person = (entry.person or "").strip()
     action = (entry.action or "").strip()
     remarks = (entry.remarks or "").strip()
@@ -1188,7 +1231,15 @@ def record_chain_of_custody(evidence_id: int, entry: ChainOfCustodyEntry):
                 remarks,
             ),
         )
-        
+
+        append_audit_event(
+            connection,
+            action_type="CHAIN_OF_CUSTODY_UPDATED",
+            case_id=case_id,
+            evidence_id=evidence_code,
+            outcome="SUCCESS",
+            metadata={"entry_id": cursor.lastrowid, "person": person, "action": action, "remarks": remarks},
+        )
         connection.commit()
         
         return {
@@ -1411,7 +1462,7 @@ def generate_pdf_report(case_id: int) -> tuple[str, str]:
         story.append(Paragraph("FORENSIC CASE REPORT", title_style))
         story.append(Spacer(1, 0.1*inch))
 
-        # Report metadata block (report SHA-256 is computed post-build and returned by API response).
+        # Report metadata block (report SHA-256 is computed post-build and returned by the API response).
         metadata_text = f"""
         <b>Report ID:</b> {report_filename}<br/>
         <b>Case Number:</b> {case_dict['case_number']}<br/>
@@ -1801,8 +1852,18 @@ def generate_pdf_report(case_id: int) -> tuple[str, str]:
 @app.post("/cases/{case_id}/report")
 def generate_case_report(case_id: int):
     """Generate a comprehensive PDF forensic report for a case."""
+    connection = get_connection()
     try:
         pdf_path, pdf_sha256 = generate_pdf_report(case_id)
+        append_audit_event(
+            connection,
+            action_type="REPORT_GENERATED",
+            case_id=case_id,
+            evidence_id=None,
+            outcome="SUCCESS",
+            metadata={"filename": Path(pdf_path).name, "sha256": pdf_sha256},
+        )
+        connection.commit()
         
         return {
             "message": "Report generated successfully",
@@ -1813,15 +1874,34 @@ def generate_case_report(case_id: int):
                 "generated_at": datetime.now(timezone.utc).isoformat()
             }
         }
-    
-    except HTTPException:
+    except HTTPException as exc:
+        append_audit_event(
+            connection,
+            action_type="REPORT_GENERATION_FAILED",
+            case_id=case_id,
+            evidence_id=None,
+            outcome="FAILURE",
+            metadata={"status_code": exc.status_code, "error": exc.detail},
+        )
+        connection.commit()
         raise
-    except Exception as e:
+    except Exception as exc:
         traceback.print_exc()
+        append_audit_event(
+            connection,
+            action_type="REPORT_GENERATION_FAILED",
+            case_id=case_id,
+            evidence_id=None,
+            outcome="FAILURE",
+            metadata={"error": str(exc)},
+        )
+        connection.commit()
         raise HTTPException(
             status_code=500,
-            detail=f"Report generation failed: {e}"
+            detail=f"Report generation failed: {exc}"
         )
+    finally:
+        connection.close()
 
 
 @app.get("/cases/{case_id}/download")
@@ -1847,8 +1927,29 @@ def download_report(case_id: int, path: str):
         raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
 
 
+@app.get("/audit")
+def get_audit_history_endpoint(case_id: int | None = None, evidence_id: str | None = None):
+    """Retrieve audit history; records are read-only through the application."""
+    connection = get_connection()
+    try:
+        return {
+            "history": get_audit_history(connection, case_id=case_id, evidence_id=evidence_id),
+            "chain_verification": verify_audit_chain(connection),
+        }
+    finally:
+        connection.close()
+
+
+@app.get("/audit/verify")
+def verify_audit_endpoint():
+    connection = get_connection()
+    try:
+        return verify_audit_chain(connection)
+    finally:
+        connection.close()
+
+
 # Serve static assets from frontend directory at /static
-# Mount AFTER all API routes so that /cases, /evidence, etc. are not intercepted
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 if FRONTEND_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")

@@ -58,8 +58,17 @@ def reset_isolated_state(isolated_app):
 
     connection = sqlite3.connect(paths["db"])
     connection.execute("PRAGMA foreign_keys = OFF")
-    for table in ("findings", "chain_of_custody", "evidence", "cases"):
+    connection.execute("DROP TRIGGER IF EXISTS prevent_audit_update")
+    connection.execute("DROP TRIGGER IF EXISTS prevent_audit_delete")
+    for table in ("findings", "chain_of_custody", "evidence", "cases", "audit_events"):
         connection.execute(f"DELETE FROM {table}")
+    connection.execute("DELETE FROM sqlite_sequence")
+    connection.execute(
+        "CREATE TRIGGER prevent_audit_update BEFORE UPDATE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events records are read-only'); END"
+    )
+    connection.execute(
+        "CREATE TRIGGER prevent_audit_delete BEFORE DELETE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events records cannot be deleted'); END"
+    )
     connection.commit()
     connection.close()
 
