@@ -1,0 +1,2384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Forensic Insight - Data Preparation</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+                'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+                sans-serif;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+        }
+
+        header h1 {
+            color: #1a1a2e;
+            font-size: 28px;
+            margin-bottom: 5px;
+        }
+
+        header p {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .nav-tabs {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        .nav-tab {
+            padding: 10px 20px;
+            border: none;
+            background: transparent;
+            color: #666;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+        }
+
+        .nav-tab.active {
+            color: #0f3460;
+            border-bottom-color: #0f3460;
+        }
+
+        .nav-tab:hover {
+            color: #0f3460;
+        }
+
+        .page {
+            display: none;
+        }
+
+        .page.active {
+            display: block;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: white;
+            padding: 25px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .card h2 {
+            color: #1a1a2e;
+            font-size: 18px;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #0f3460;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            color: #333;
+            font-weight: 500;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        select, input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            font-family: inherit;
+        }
+
+        select:focus, input:focus {
+            outline: none;
+            border-color: #0f3460;
+            box-shadow: 0 0 0 3px rgba(15, 52, 96, 0.1);
+        }
+
+        input[type="file"] {
+            padding: 8px;
+        }
+
+        .file-upload {
+            position: relative;
+            border: 2px dashed #0f3460;
+            border-radius: 4px;
+            padding: 30px;
+            text-align: center;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .file-upload:hover {
+            background: #f5f7fa;
+        }
+
+        .file-upload input[type="file"] {
+            display: none;
+        }
+
+        .upload-icon {
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+
+        .file-upload p {
+            color: #666;
+            margin-bottom: 5px;
+        }
+
+        .file-types {
+            color: #999;
+            font-size: 12px;
+        }
+
+        textarea {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            font-family: inherit;
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: #0f3460;
+            box-shadow: 0 0 0 3px rgba(15, 52, 96, 0.1);
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            width: 100%;
+        }
+
+        .btn-primary {
+            background: #0f3460;
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #0a1f3a;
+            box-shadow: 0 4px 12px rgba(15, 52, 96, 0.3);
+        }
+
+        .btn-primary:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #e0e0e0;
+            color: #333;
+        }
+
+        .btn-secondary:hover {
+            background: #d0d0d0;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+        }
+
+        .button-group button {
+            flex: 1;
+        }
+
+        .alert {
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .alert.show {
+            display: block;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .alert-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+
+        table thead {
+            background: #f5f7fa;
+            border-bottom: 2px solid #0f3460;
+        }
+
+        table th {
+            padding: 15px;
+            text-align: left;
+            color: #1a1a2e;
+            font-weight: 600;
+        }
+
+        table td {
+            padding: 15px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        table tbody tr:hover {
+            background: #f9fafb;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-registered {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .hash {
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 12px;
+            word-break: break-all;
+            color: #333;
+            background: #f5f7fa;
+            padding: 8px;
+            border-radius: 4px;
+            display: block;
+            margin-top: 5px;
+        }
+
+        .hash-label {
+            color: #666;
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 5px;
+            display: block;
+        }
+
+        .coc-section {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #e0e0e0;
+        }
+
+        .coc-label {
+            color: #999;
+            font-size: 12px;
+            margin-top: 10px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: #999;
+        }
+
+        .empty-state p {
+            margin-bottom: 10px;
+        }
+
+        .empty-state .icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #0f3460;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+
+        .modal.show {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            font-size: 18px;
+            font-weight: 600;
+            color: #1a1a2e;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #0f3460;
+        }
+
+        .modal-body {
+            margin-bottom: 20px;
+        }
+
+        .modal-footer {
+            display: flex;
+            gap: 10px;
+        }
+
+        .modal-footer button {
+            flex: 1;
+        }
+
+        .close-modal {
+            cursor: pointer;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            color: #999;
+            line-height: 1;
+        }
+
+        .close-modal:hover {
+            color: #333;
+        }
+
+        .coc-list {
+            background: #f5f7fa;
+            border-radius: 4px;
+            padding: 15px;
+            margin-top: 10px;
+        }
+
+        .coc-item {
+            padding: 12px;
+            background: white;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            border-left: 4px solid #0f3460;
+        }
+
+        .coc-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .coc-datetime {
+            font-size: 12px;
+            color: #999;
+            margin-bottom: 5px;
+        }
+
+        .coc-person {
+            font-weight: 600;
+            color: #1a1a2e;
+        }
+
+        .coc-action {
+            color: #666;
+            margin: 5px 0;
+        }
+
+        .coc-remarks {
+            font-size: 13px;
+            color: #999;
+            font-style: italic;
+        }
+
+        .severity-HIGH {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-weight: 600;
+            font-size: 12px;
+        }
+
+        .severity-MEDIUM {
+            background: #fff3cd;
+            color: #856404;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-weight: 600;
+            font-size: 12px;
+        }
+
+        .severity-LOW {
+            background: #d1ecf1;
+            color: #0c5460;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-weight: 600;
+            font-size: 12px;
+        }
+
+        .summary-box {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .summary-card {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            padding: 15px;
+            text-align: center;
+        }
+
+        .summary-card .number {
+            font-size: 28px;
+            font-weight: bold;
+            color: #0f3460;
+            margin-bottom: 5px;
+        }
+
+        .summary-card .label {
+            font-size: 12px;
+            color: #999;
+            font-weight: 600;
+        }
+
+        .finding-row {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            padding: 15px;
+            margin-bottom: 15px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .finding-row:hover {
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .finding-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .finding-id {
+            font-family: monospace;
+            font-size: 12px;
+            color: #666;
+        }
+
+        .finding-reason {
+            color: #1a1a2e;
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+
+        .finding-detail {
+            font-size: 13px;
+            color: #666;
+            line-height: 1.5;
+        }
+
+        .finding-detail strong {
+            color: #1a1a2e;
+        }
+
+        .finding-meta {
+            display: flex;
+            gap: 15px;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid #f0f0f0;
+            font-size: 12px;
+            color: #999;
+        }
+
+        .finding-meta span {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .evidence-link {
+            color: #0f3460;
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .evidence-link:hover {
+            text-decoration: underline;
+        }
+
+        .finding-modal-section {
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .finding-modal-section:last-child {
+            border-bottom: none;
+        }
+
+        .section-title {
+            font-size: 12px;
+            color: #999;
+            font-weight: 600;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+        }
+
+        .section-content {
+            font-size: 14px;
+            color: #1a1a2e;
+            line-height: 1.6;
+        }
+
+        .how-flagged {
+            background: #f5f7fa;
+            border-left: 4px solid #0f3460;
+            padding: 12px;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+
+        .how-flagged-title {
+            font-weight: 600;
+            color: #0f3460;
+            font-size: 12px;
+            margin-bottom: 5px;
+        }
+
+        .how-flagged-content {
+            font-size: 13px;
+            color: #666;
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+
+            header h1 {
+                font-size: 22px;
+            }
+
+            .card {
+                padding: 20px;
+            }
+
+            .nav-tabs {
+                flex-wrap: wrap;
+            }
+
+            .summary-box {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔬 Forensic Insight</h1>
+            <p>Digital forensic evidence analysis and reporting platform</p>
+            <div class="nav-tabs">
+                <button class="nav-tab active" data-page="phase1">📊 Data Preparation</button>
+                <button class="nav-tab" data-page="phase2">🎯 Threat Detection</button>
+                <button class="nav-tab" data-page="phase3">📈 Visual Analysis</button>
+                <button class="nav-tab" data-page="phase4">📋 Case Summary</button>
+                <button class="nav-tab" data-page="phase5">📄 Report Generation</button>
+            </div>
+        </header>
+
+        <!-- PHASE 1: Data Preparation -->
+        <div id="phase1" class="page active">
+        <div class="main-content">
+            <!-- Left Sidebar: Case & Upload -->
+            <div class="card">
+                <h2>Case & Evidence</h2>
+
+                <div id="alert" class="alert"></div>
+
+                <div class="form-group">
+                    <label for="caseSelect">Select or Create Case</label>
+                    <select id="caseSelect">
+                        <option value="">-- Loading cases --</option>
+                    </select>
+                </div>
+
+                <button class="btn btn-secondary" id="newCaseBtn" style="margin-bottom: 20px;">+ Create New Case</button>
+
+                <div id="caseDetails" style="display: none; background: #f5f7fa; padding: 15px; border-radius: 4px; margin-bottom: 20px;">
+                    <p style="font-size: 12px; color: #999; margin-bottom: 5px;">Case Information</p>
+                    <p id="caseInfo" style="font-size: 14px; color: #1a1a2e;"></p>
+                </div>
+
+                <div class="form-group">
+                    <label>Upload Evidence File</label>
+                    <div class="file-upload" id="fileUpload">
+                        <div class="upload-icon">📁</div>
+                        <p><strong>Click to upload or drag & drop</strong></p>
+                        <p class="file-types">CSV, JSON, TXT, LOG only • Max file size: 100MB</p>
+                        <input type="file" id="fileInput" accept=".csv,.json,.txt,.log">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="sourceDescription">Source Description</label>
+                    <textarea id="sourceDescription" placeholder="e.g., Device USB backup, Network log extract, User reported file..."></textarea>
+                </div>
+
+                <button class="btn btn-primary" id="uploadBtn" disabled>Register Evidence</button>
+
+                <div class="coc-section">
+                    <h3 style="font-size: 14px; margin-bottom: 15px;">Initial Chain of Custody</h3>
+                    
+                    <div class="form-group">
+                        <label for="cocPerson">Person Name</label>
+                        <input type="text" id="cocPerson" placeholder="e.g., Investigator Name" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="cocAction">Action</label>
+                        <select id="cocAction">
+                            <option value="">-- Select Action --</option>
+                            <option value="Received">Received</option>
+                            <option value="Registered">Registered</option>
+                            <option value="Analyzed">Analyzed</option>
+                            <option value="Transferred">Transferred</option>
+                            <option value="Verified">Verified</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="cocRemarks">Remarks</label>
+                        <textarea id="cocRemarks" placeholder="e.g., Initial intake, hash verified..." style="min-height: 60px;" required></textarea>
+                    </div>
+
+                    <button class="btn btn-secondary" id="recordCocBtn" disabled>Record Chain of Custody</button>
+                </div>
+            </div>
+
+            <!-- Right Section: Evidence Inventory -->
+            <div class="card">
+                <h2>Evidence Inventory</h2>
+
+                <div id="loading" class="loading">
+                    <div class="spinner"></div>
+                    <p style="margin-top: 10px;">Loading evidence...</p>
+                </div>
+
+                <div id="emptyState" class="empty-state">
+                    <div class="icon">📋</div>
+                    <p><strong>No evidence registered yet</strong></p>
+                    <p>Select a case and upload evidence to get started</p>
+                </div>
+
+                <div id="evidenceTableContainer" style="display: none;">
+                    <table id="evidenceTable">
+                        <thead>
+                            <tr>
+                                <th>Evidence ID</th>
+                                <th>File</th>
+                                <th>Size</th>
+                                <th>Status</th>
+                                <th>Registered</th>
+                                <th>SHA-256</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- PHASE 2: Threat Detection -->
+    <div id="phase2" class="page">
+        <div class="card" style="margin-bottom: 30px;">
+            <h2>🎯 Threat Detection Analysis</h2>
+
+            <div id="phase2Alert" class="alert"></div>
+
+            <div class="form-group">
+                <label for="phase2CaseSelect">Select Case</label>
+                <select id="phase2CaseSelect">
+                    <option value="">-- Loading cases --</option>
+                </select>
+            </div>
+
+            <button class="btn btn-primary" id="analyzeBtn" disabled style="margin-bottom: 20px;">Analyze Evidence</button>
+
+            <div id="analysisResults" style="display: none;">
+                <div class="summary-box">
+                    <div class="summary-card">
+                        <div class="number" id="totalEventsNum">0</div>
+                        <div class="label">Total Events</div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="number" id="flaggedEventsNum">0</div>
+                        <div class="label">Flagged Events</div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="number" id="highSeverityNum">0</div>
+                        <div class="label">High Severity</div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="number" id="mediumSeverityNum">0</div>
+                        <div class="label">Medium Severity</div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="number" id="lowSeverityNum">0</div>
+                        <div class="label">Low Severity</div>
+                    </div>
+                </div>
+
+                <h3 style="font-size: 16px; color: #1a1a2e; margin-bottom: 15px;">Flagged Events</h3>
+                <div id="findingsList"></div>
+            </div>
+
+            <div id="noFindingsState" class="empty-state" style="display: none;">
+                <div class="icon">✓</div>
+                <p><strong>No findings</strong></p>
+                <p>No suspicious events detected in the analyzed evidence</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- PHASE 3: Visual Analysis -->
+    <div id="phase3" class="page">
+        <div class="card">
+            <h2>📈 Visual Forensic Analysis</h2>
+            <p style="color: #666; margin-bottom: 20px;">Simple in-application visual view of activity timeline, evidence-to-findings links, and source activity.</p>
+
+            <div id="phase3Alert" class="alert"></div>
+
+            <div class="form-group">
+                <label for="phase3CaseSelect">Select Case</label>
+                <select id="phase3CaseSelect">
+                    <option value="">-- Loading cases --</option>
+                </select>
+            </div>
+
+            <!-- ACTIVITY TIMELINE -->
+            <div style="margin-top: 30px; padding: 20px; background: #f9fafb; border-radius: 4px; border-left: 4px solid #0f3460;">
+                <h3 style="color: #1a1a2e; margin-bottom: 10px;">Figure 1 — Activity Timeline</h3>
+                <p style="color: #666; font-size: 13px; margin-bottom: 15px;">Chronological event list from case evidence.</p>
+                <div id="timelineView" style="display: none;">
+                    <div id="timelineList" style="display: grid; gap: 10px;"></div>
+                </div>
+                <div id="timelineEmpty" style="text-align: center; padding: 30px; color: #999;">
+                    <p>Select a case to view timeline</p>
+                </div>
+            </div>
+
+            <!-- EVIDENCE TO FINDINGS -->
+            <div style="margin-top: 30px; padding: 20px; background: #f9fafb; border-radius: 4px; border-left: 4px solid #0f3460;">
+                <h3 style="color: #1a1a2e; margin-bottom: 10px;">Figure 2 — Evidence-to-Event-to-Finding Traceability</h3>
+                <p style="color: #666; font-size: 13px; margin-bottom: 15px;">Evidence items and their linked findings.</p>
+                <div id="evidenceFindingsView" style="display: none;">
+                    <div id="evidenceFindingsList" style="display: grid; gap: 12px;"></div>
+                </div>
+                <div id="evidenceFindingsEmpty" style="text-align: center; padding: 30px; color: #999;">
+                    <p>Select a case to view evidence traceability</p>
+                </div>
+            </div>
+
+            <!-- SOURCE ACTIVITY -->
+            <div style="margin-top: 30px; padding: 20px; background: #f9fafb; border-radius: 4px; border-left: 4px solid #0f3460;">
+                <h3 style="color: #1a1a2e; margin-bottom: 10px;">Figure 3 — Source Activity Summary</h3>
+                <p style="color: #666; font-size: 13px; margin-bottom: 15px;">Event counts by source with top accessed resource.</p>
+                <div id="sourceActivityView" style="display: none;">
+                    <div id="sourceActivityBars" style="display: grid; gap: 10px;"></div>
+                </div>
+                <div id="sourceActivityEmpty" style="text-align: center; padding: 30px; color: #999;">
+                    <p>Select a case to view source activity</p>
+                </div>
+            </div>
+
+            <!-- DETAILED FINDINGS REFERENCE (RETAINED) -->
+            <div style="margin-top: 30px; padding: 20px; background: #ffffff; border-radius: 4px; border: 1px solid #e0e0e0;">
+                <h3 style="color: #1a1a2e; margin-bottom: 10px;">Detailed Findings (Reference)</h3>
+                <p style="color: #666; font-size: 13px; margin-bottom: 15px;">Detailed findings remain available for full forensic review. Click an entry for full details.</p>
+                <div id="phase3FindingsList"></div>
+                <div id="phase3FindingsEmpty" style="display: none; text-align: center; color: #999; padding: 15px;">
+                    No findings available for this case.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- PHASE 4: Case Summary -->
+    <div id="phase4" class="page">
+        <div class="card">
+            <h2>📋 Case Summary</h2>
+            <p style="color: #666; margin-bottom: 20px;">Technical findings presented for stakeholder understanding</p>
+
+            <div id="phase4Alert" class="alert"></div>
+
+            <div class="form-group">
+                <label for="phase4CaseSelect">Select Case</label>
+                <select id="phase4CaseSelect">
+                    <option value="">-- Loading cases --</option>
+                </select>
+            </div>
+
+            <!-- CASE OVERVIEW -->
+            <div id="caseOverviewSection" style="display: none; background: white; border: 1px solid #e0e0e0; border-radius: 4px; padding: 20px; margin-top: 30px;">
+                <h3 style="color: #1a1a2e; margin-bottom: 15px; border-bottom: 2px solid #0f3460; padding-bottom: 10px;">Case Overview</h3>
+                <div id="caseOverviewContent" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px;"></div>
+            </div>
+
+            <!-- KEY FINDINGS -->
+            <div id="keyFindingsSection" style="display: none; margin-top: 30px;">
+                <h3 style="color: #1a1a2e; margin-bottom: 15px; border-bottom: 2px solid #0f3460; padding-bottom: 10px;">Key Findings</h3>
+                <div id="findingsSummaryContainer"></div>
+            </div>
+
+            <!-- OVERALL INTERPRETATION -->
+            <div id="overallInterpretationSection" style="display: none; background: #f0f8ff; border: 1px solid #0f3460; border-radius: 4px; padding: 20px; margin-top: 30px;">
+                <h3 style="color: #0f3460; margin-bottom: 10px;">Overall Case Interpretation</h3>
+                <div id="overallInterpretationContent" style="color: #1a1a2e; line-height: 1.6;"></div>
+            </div>
+
+            <!-- LIMITATIONS -->
+            <div id="limitationsSection" style="display: none; background: #fff9e6; border: 1px solid #ff9800; border-radius: 4px; padding: 20px; margin-top: 30px;">
+                <h3 style="color: #ff9800; margin-bottom: 10px;">⚠️ Limitations of Available Evidence</h3>
+                <div id="limitationsContent" style="color: #1a1a2e; line-height: 1.6; font-size: 14px;"></div>
+            </div>
+
+            <div id="caseEmptyState" style="text-align: center; padding: 40px; color: #999;">
+                <div class="icon">📋</div>
+                <p><strong>No case selected</strong></p>
+                <p>Select a case above to view its summary</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- PHASE 5: Report Generation -->
+    <div id="phase5" class="page">
+        <div class="card">
+            <h2>📄 Report Generation</h2>
+            <p style="color: #666; margin-bottom: 20px;">Generate professional PDF forensic reports</p>
+
+            <div id="phase5Alert" class="alert"></div>
+
+            <div class="form-group">
+                <label for="phase5CaseSelect">Select Case</label>
+                <select id="phase5CaseSelect">
+                    <option value="">-- Loading cases --</option>
+                </select>
+            </div>
+
+            <div id="reportGenerationUI" style="display: none;">
+                <div style="background: #f0f8ff; border: 1px solid #0f3460; border-radius: 4px; padding: 20px; margin-bottom: 20px;">
+                    <h3 style="color: #0f3460; margin-top: 0;">Report Contents</h3>
+                    <ul style="list-style: none; padding-left: 0; font-size: 14px; line-height: 1.8;">
+                        <li>✓ Case Identification</li>
+                        <li>✓ Executive/Stakeholder Summary</li>
+                        <li>✓ Evidence Inventory with SHA-256</li>
+                        <li>✓ Chain of Custody History</li>
+                        <li>✓ Threat Findings Summary</li>
+                        <li>✓ Activity Timeline</li>
+                        <li>✓ Detection Methodology</li>
+                        <li>✓ Stakeholder Explanations</li>
+                        <li>✓ Limitations & Disclaimer</li>
+                        <li>✓ Appendix with References</li>
+                    </ul>
+                </div>
+
+                <button class="btn btn-primary" onclick="generatePDFReport()" style="width: 100%; padding: 12px; font-size: 16px; margin-bottom: 20px;">
+                    📥 Generate PDF Report
+                </button>
+
+                <div id="reportOutput" style="display: none;">
+                    <div style="background: #d4edda; border: 1px solid #28a745; border-radius: 4px; padding: 20px; margin-bottom: 20px;">
+                        <div style="color: #155724; font-size: 16px; font-weight: 600; margin-bottom: 10px;">✅ Report Generated Successfully</div>
+                        <div style="color: #155724; line-height: 1.6;">
+                            <div style="margin-bottom: 10px;">
+                                <strong>Filename:</strong> <span id="reportFilename"></span>
+                            </div>
+                            <div style="margin-bottom: 10px;">
+                                <strong>SHA-256 Hash:</strong><br/>
+                                <code style="background: white; padding: 10px; display: block; border-radius: 3px; word-break: break-all; font-size: 12px;" id="reportHash"></code>
+                            </div>
+                            <div style="margin-top: 15px;">
+                                <button class="btn btn-secondary" onclick="downloadPDFReport()" style="padding: 8px 16px; margin-right: 10px;">📥 Download Report</button>
+                                <button class="btn btn-secondary" onclick="viewPDFReport()" style="padding: 8px 16px;">👁️ View Report</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="reportEmptyState" style="text-align: center; padding: 40px; color: #999;">
+                <div class="icon">📄</div>
+                <p><strong>No case selected</strong></p>
+                <p>Select a case above to generate its forensic report</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Finding Details -->
+    <div id="findingModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal" id="closeFindingModal">&times;</span>
+            <div class="modal-header" id="findingModalTitle">Finding Details</div>
+            <div class="modal-body" id="findingModalBody"></div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="closeFindingBtn">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: New Case -->
+
+    <div id="newCaseModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal" id="closeNewCaseModal">&times;</span>
+            <div class="modal-header">Create New Case</div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="newCaseNumber">Case Number</label>
+                    <input type="text" id="newCaseNumber" placeholder="e.g., 2024-001">
+                </div>
+                <div class="form-group">
+                    <label for="newCaseTitle">Case Title</label>
+                    <input type="text" id="newCaseTitle" placeholder="e.g., Device Forensics - Incident Response">
+                </div>
+                <div class="form-group">
+                    <label for="newCaseInvestigator">Investigator Name</label>
+                    <input type="text" id="newCaseInvestigator" placeholder="Your name">
+                </div>
+                <div class="form-group">
+                    <label for="newCaseDescription">Description</label>
+                    <textarea id="newCaseDescription" placeholder="Case description..."></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="cancelNewCaseBtn">Cancel</button>
+                <button class="btn btn-primary" id="submitNewCaseBtn">Create Case</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Evidence Details & CoC -->
+    <div id="evidenceModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal" id="closeEvidenceModal">&times;</span>
+            <div class="modal-header" id="evidenceModalTitle">Evidence Details</div>
+            <div class="modal-body" id="evidenceModalBody"></div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="closeEvidenceBtn">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = "/api";
+
+        let currentCaseId = null;
+        let currentEvidenceId = null;
+        let selectedFile = null;
+
+        // Initialize
+        document.addEventListener("DOMContentLoaded", () => {
+            loadCases();
+            setupFileUpload();
+            setupEventListeners();
+        });
+
+        function setupEventListeners() {
+            document.getElementById("caseSelect").addEventListener("change", (e) => {
+                currentCaseId = e.target.value ? parseInt(e.target.value) : null;
+                loadEvidenceForCase();
+                updateUI();
+            });
+
+            document.getElementById("fileInput").addEventListener("change", (e) => {
+                selectedFile = e.target.files[0];
+                updateUI();
+            });
+
+            document.getElementById("uploadBtn").addEventListener("click", uploadEvidence);
+            document.getElementById("recordCocBtn").addEventListener("click", recordInitialCoC);
+            document.getElementById("cocPerson").addEventListener("input", updateUI);
+            document.getElementById("cocAction").addEventListener("change", updateUI);
+            document.getElementById("cocRemarks").addEventListener("input", updateUI);
+            document.getElementById("newCaseBtn").addEventListener("click", () => {
+                document.getElementById("newCaseModal").classList.add("show");
+            });
+
+            document.getElementById("closeNewCaseModal").addEventListener("click", () => {
+                document.getElementById("newCaseModal").classList.remove("show");
+            });
+
+            document.getElementById("cancelNewCaseBtn").addEventListener("click", () => {
+                document.getElementById("newCaseModal").classList.remove("show");
+            });
+
+            document.getElementById("submitNewCaseBtn").addEventListener("click", createNewCase);
+
+            document.getElementById("closeEvidenceModal").addEventListener("click", () => {
+                document.getElementById("evidenceModal").classList.remove("show");
+            });
+
+            document.getElementById("closeEvidenceBtn").addEventListener("click", () => {
+                document.getElementById("evidenceModal").classList.remove("show");
+            });
+
+            // Close modal on outside click
+            window.addEventListener("click", (e) => {
+                const modal = document.getElementById("newCaseModal");
+                if (e.target === modal) {
+                    modal.classList.remove("show");
+                }
+            });
+        }
+
+        function setupFileUpload() {
+            const fileUpload = document.getElementById("fileUpload");
+            const fileInput = document.getElementById("fileInput");
+
+            fileUpload.addEventListener("click", () => fileInput.click());
+
+            fileUpload.addEventListener("dragover", (e) => {
+                e.preventDefault();
+                fileUpload.style.background = "#f5f7fa";
+            });
+
+            fileUpload.addEventListener("dragleave", () => {
+                fileUpload.style.background = "";
+            });
+
+            fileUpload.addEventListener("drop", (e) => {
+                e.preventDefault();
+                fileUpload.style.background = "";
+                if (e.dataTransfer.files.length > 0) {
+                    fileInput.files = e.dataTransfer.files;
+                    selectedFile = e.dataTransfer.files[0];
+                    updateUI();
+                }
+            });
+        }
+
+        async function loadCases() {
+            try {
+                const response = await fetch("/cases");
+                const data = await response.json();
+                
+                const select = document.getElementById("caseSelect");
+                select.innerHTML = '<option value="">-- Select a case --</option>';
+                
+                if (data.cases && data.cases.length > 0) {
+                    data.cases.forEach(caseItem => {
+                        const option = document.createElement("option");
+                        option.value = caseItem.id;
+                        option.textContent = `${caseItem.case_number} - ${caseItem.title}`;
+                        select.appendChild(option);
+                    });
+                }
+            } catch (error) {
+                showAlert("Error loading cases: " + error.message, "error");
+            }
+        }
+
+        async function createNewCase() {
+            const caseNumber = document.getElementById("newCaseNumber").value.trim();
+            const caseTitle = document.getElementById("newCaseTitle").value.trim();
+            const investigator = document.getElementById("newCaseInvestigator").value.trim();
+            const description = document.getElementById("newCaseDescription").value.trim();
+
+            if (!caseNumber || !caseTitle || !investigator) {
+                showAlert("Please fill in all required fields", "error");
+                return;
+            }
+
+            try {
+                const response = await fetch("/cases", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        case_number: caseNumber,
+                        title: caseTitle,
+                        investigator: investigator,
+                        description: description
+                    })
+                });
+
+                if (!response.ok) throw new Error("Failed to create case");
+
+                showAlert("Case created successfully!", "success");
+                document.getElementById("newCaseModal").classList.remove("show");
+                
+                // Clear form
+                document.getElementById("newCaseNumber").value = "";
+                document.getElementById("newCaseTitle").value = "";
+                document.getElementById("newCaseInvestigator").value = "";
+                document.getElementById("newCaseDescription").value = "";
+
+                // Reload cases
+                await loadCases();
+            } catch (error) {
+                showAlert("Error creating case: " + error.message, "error");
+            }
+        }
+
+        async function loadEvidenceForCase() {
+            if (!currentCaseId) {
+                document.getElementById("emptyState").style.display = "block";
+                document.getElementById("evidenceTableContainer").style.display = "none";
+                document.getElementById("caseDetails").style.display = "none";
+                return;
+            }
+
+            document.getElementById("loading").style.display = "block";
+
+            try {
+                // Get case details
+                const casesResponse = await fetch("/cases");
+                const casesData = await casesResponse.json();
+                const caseItem = casesData.cases.find(c => c.id === currentCaseId);
+                
+                if (caseItem) {
+                    document.getElementById("caseInfo").textContent = 
+                        `${caseItem.case_number} • ${caseItem.investigator} • Created: ${new Date(caseItem.created_at).toLocaleDateString()}`;
+                    document.getElementById("caseDetails").style.display = "block";
+                }
+
+                // Get evidence
+                const response = await fetch(`/cases/${currentCaseId}/evidence`);
+                const data = await response.json();
+
+                document.getElementById("loading").style.display = "none";
+
+                if (!data.evidence || data.evidence.length === 0) {
+                    document.getElementById("emptyState").style.display = "block";
+                    document.getElementById("evidenceTableContainer").style.display = "none";
+                    return;
+                }
+
+                document.getElementById("emptyState").style.display = "none";
+                document.getElementById("evidenceTableContainer").style.display = "block";
+
+                const tbody = document.getElementById("evidenceTable").querySelector("tbody");
+                tbody.innerHTML = "";
+
+                data.evidence.forEach(evidence => {
+                    const row = document.createElement("tr");
+                    row.innerHTML = `
+                        <td><strong>${evidence.evidence_id}</strong></td>
+                        <td>${evidence.original_filename}</td>
+                        <td>${formatFileSize(evidence.file_size)}</td>
+                        <td><span class="status-badge status-${evidence.status.toLowerCase().replace(' ', '-')}">${evidence.status}</span></td>
+                        <td>${new Date(evidence.registered_date).toLocaleDateString()}</td>
+                        <td>
+                            <span class="hash-label">SHA-256:</span>
+                            <span class="hash">${evidence.sha256}</span>
+                        </td>
+                        <td>
+                            <button class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px;" 
+                                onclick="viewEvidenceDetails(${evidence.id}, '${evidence.evidence_id}')">View CoC</button>
+                        </td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            } catch (error) {
+                document.getElementById("loading").style.display = "none";
+                showAlert("Error loading evidence: " + error.message, "error");
+            }
+        }
+
+        async function uploadEvidence() {
+            if (!currentCaseId) {
+                showAlert("Please select a case first", "error");
+                return;
+            }
+
+            if (!selectedFile) {
+                showAlert("Please select a file to upload", "error");
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append("file", selectedFile);
+            formData.append("source_description", document.getElementById("sourceDescription").value);
+
+            const uploadBtn = document.getElementById("uploadBtn");
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = "Uploading...";
+
+            try {
+                const response = await fetch(`/cases/${currentCaseId}/evidence`, {
+                    method: "POST",
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || "Upload failed");
+                }
+
+                const data = await response.json();
+                currentEvidenceId = data.evidence.id;
+
+                showAlert("Evidence registered successfully! Now record chain of custody.", "success");
+
+                // Clear form
+                selectedFile = null;
+                document.getElementById("fileInput").value = "";
+                document.getElementById("sourceDescription").value = "";
+
+                // Reload evidence
+                await loadEvidenceForCase();
+                updateUI();
+            } catch (error) {
+                showAlert("Error uploading evidence: " + error.message, "error");
+            } finally {
+                uploadBtn.disabled = false;
+                uploadBtn.textContent = "Register Evidence";
+            }
+        }
+
+        async function recordInitialCoC() {
+            if (!currentEvidenceId) {
+                showAlert("Please upload evidence first", "error");
+                return;
+            }
+
+            const person = document.getElementById("cocPerson").value.trim();
+            const action = document.getElementById("cocAction").value.trim();
+            const remarks = document.getElementById("cocRemarks").value.trim();
+
+            if (!person || !action || !remarks) {
+                showAlert("Person, action, and remarks are required for a chain-of-custody entry.", "error");
+                return;
+            }
+
+            try {
+                const response = await fetch(`/evidence/${currentEvidenceId}/chain-of-custody`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        person: person,
+                        action: action,
+                        remarks: remarks
+                    })
+                });
+
+                if (!response.ok) throw new Error("Failed to record chain of custody");
+
+                showAlert("Chain of custody recorded!", "success");
+
+                // Keep the same evidence selected so multiple custody entries can be recorded.
+                document.getElementById("cocPerson").value = "";
+                document.getElementById("cocAction").value = "";
+                document.getElementById("cocRemarks").value = "";
+
+                updateUI();
+            } catch (error) {
+                showAlert("Error recording chain of custody: " + error.message, "error");
+            }
+        }
+
+        async function viewEvidenceDetails(evidenceId, evidenceIdStr) {
+            currentEvidenceId = evidenceId;
+            updateUI();
+
+            try {
+                const response = await fetch(`/evidence/${evidenceId}/chain-of-custody`);
+                const data = await response.json();
+
+                let html = `
+                    <div style="margin-bottom: 20px;">
+                        <p style="font-size: 12px; color: #999; margin-bottom: 5px;">Evidence ID</p>
+                        <p style="font-size: 14px; color: #1a1a2e; font-family: monospace;">${evidenceIdStr}</p>
+                    </div>
+                `;
+
+                if (data.chain_of_custody && data.chain_of_custody.length > 0) {
+                    html += `<h3 style="font-size: 14px; margin-bottom: 15px;">Chain of Custody History</h3>`;
+                    html += `<div class="coc-list">`;
+                    
+                    data.chain_of_custody.forEach(entry => {
+                        const dateTime = new Date(entry.date_time);
+                        html += `
+                            <div class="coc-item">
+                                <div class="coc-datetime">📅 ${dateTime.toLocaleString()}</div>
+                                <div class="coc-person">👤 ${entry.person}</div>
+                                <div class="coc-action">✓ ${entry.action}</div>
+                                ${entry.remarks ? `<div class="coc-remarks">💬 "${entry.remarks}"</div>` : ''}
+                            </div>
+                        `;
+                    });
+                    
+                    html += `</div>`;
+                } else {
+                    html += `<p style="text-align: center; color: #999; padding: 20px;">No chain of custody records yet</p>`;
+                }
+
+                document.getElementById("evidenceModalBody").innerHTML = html;
+                document.getElementById("evidenceModalTitle").textContent = `Chain of Custody: ${evidenceIdStr}`;
+                document.getElementById("evidenceModal").classList.add("show");
+            } catch (error) {
+                showAlert("Error loading chain of custody: " + error.message, "error");
+            }
+        }
+
+        function updateUI() {
+            const hasCase = currentCaseId !== null;
+            const hasFile = selectedFile !== null;
+            const hasCoC =
+                document.getElementById("cocPerson").value.trim() &&
+                document.getElementById("cocAction").value.trim() &&
+                document.getElementById("cocRemarks").value.trim();
+
+            document.getElementById("uploadBtn").disabled = !hasCase || !hasFile;
+            document.getElementById("recordCocBtn").disabled = !currentEvidenceId || !hasCoC;
+        }
+
+        function showAlert(message, type) {
+            const alert = document.getElementById("alert");
+            alert.textContent = message;
+            alert.className = `alert show alert-${type}`;
+            setTimeout(() => {
+                alert.classList.remove("show");
+            }, 5000);
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return "0 Bytes";
+            const k = 1024;
+            const sizes = ["Bytes", "KB", "MB", "GB"];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + " " + sizes[i];
+        }
+
+        // Phase 2: Threat Detection
+        let phase2CaseId = null;
+
+        // Setup Phase 2 event listeners
+        document.addEventListener("DOMContentLoaded", () => {
+            setupTabNavigation();
+            setupPhase2EventListeners();
+        });
+
+        function setupTabNavigation() {
+            document.querySelectorAll(".nav-tab").forEach(tab => {
+                tab.addEventListener("click", () => {
+                    const pageName = tab.getAttribute("data-page");
+                    showPage(pageName);
+                });
+            });
+        }
+
+        function showPage(pageName) {
+            // Hide all pages
+            document.querySelectorAll(".page").forEach(page => {
+                page.classList.remove("active");
+            });
+            
+            // Remove active state from all tabs
+            document.querySelectorAll(".nav-tab").forEach(tab => {
+                tab.classList.remove("active");
+            });
+            
+            // Show selected page
+            const page = document.getElementById(pageName);
+            if (page) {
+                page.classList.add("active");
+            }
+            
+            // Set active tab
+            const tab = document.querySelector(`[data-page="${pageName}"]`);
+            if (tab) {
+                tab.classList.add("active");
+            }
+
+            // If Phase 2 is shown, load cases for Phase 2
+            if (pageName === "phase2") {
+                loadPhase2Cases();
+            }
+        }
+
+        function setupPhase2EventListeners() {
+            document.getElementById("phase2CaseSelect").addEventListener("change", (e) => {
+                phase2CaseId = e.target.value ? parseInt(e.target.value) : null;
+                updatePhase2UI();
+            });
+
+            document.getElementById("analyzeBtn").addEventListener("click", analyzeCase);
+
+            document.getElementById("closeFindingModal").addEventListener("click", () => {
+                document.getElementById("findingModal").classList.remove("show");
+            });
+
+            document.getElementById("closeFindingBtn").addEventListener("click", () => {
+                document.getElementById("findingModal").classList.remove("show");
+            });
+
+            window.addEventListener("click", (e) => {
+                const modal = document.getElementById("findingModal");
+                if (e.target === modal) {
+                    modal.classList.remove("show");
+                }
+            });
+        }
+
+        async function loadPhase2Cases() {
+            try {
+                const response = await fetch("/cases");
+                const data = await response.json();
+                
+                const select = document.getElementById("phase2CaseSelect");
+                select.innerHTML = '<option value="">-- Select a case --</option>';
+                
+                if (data.cases && data.cases.length > 0) {
+                    data.cases.forEach(caseItem => {
+                        const option = document.createElement("option");
+                        option.value = caseItem.id;
+                        option.textContent = `${caseItem.case_number} - ${caseItem.title}`;
+                        select.appendChild(option);
+                    });
+                }
+            } catch (error) {
+                showPhase2Alert("Error loading cases: " + error.message, "error");
+            }
+        }
+
+        function updatePhase2UI() {
+            document.getElementById("analyzeBtn").disabled = !phase2CaseId;
+            document.getElementById("analysisResults").style.display = "none";
+            document.getElementById("noFindingsState").style.display = "none";
+        }
+
+        async function analyzeCase() {
+            if (!phase2CaseId) {
+                showPhase2Alert("Please select a case first", "error");
+                return;
+            }
+
+            const btn = document.getElementById("analyzeBtn");
+            btn.disabled = true;
+            btn.textContent = "Analyzing...";
+
+            try {
+                const response = await fetch(`/cases/${phase2CaseId}/analyze`, {
+                    method: "POST"
+                });
+
+                if (!response.ok) throw new Error("Analysis failed");
+
+                const data = await response.json();
+                showPhase2Alert("Analysis complete! " + data.findings_count + " findings detected.", "success");
+                
+                // Load and display findings
+                await loadFindings();
+            } catch (error) {
+                showPhase2Alert("Error analyzing evidence: " + error.message, "error");
+            } finally {
+                btn.disabled = false;
+                btn.textContent = "Analyze Evidence";
+            }
+        }
+
+        async function loadFindings() {
+            if (!phase2CaseId) return;
+
+            try {
+                const response = await fetch(`/cases/${phase2CaseId}/findings`);
+                const data = await response.json();
+
+                if (!data.findings || data.findings.length === 0) {
+                    document.getElementById("analysisResults").style.display = "none";
+                    document.getElementById("noFindingsState").style.display = "block";
+                    return;
+                }
+
+                // Update summary
+                document.getElementById("totalEventsNum").textContent = "~" + (data.findings.length * 5);
+                document.getElementById("flaggedEventsNum").textContent = data.findings.length;
+                document.getElementById("highSeverityNum").textContent = data.severity_counts.HIGH || 0;
+                document.getElementById("mediumSeverityNum").textContent = data.severity_counts.MEDIUM || 0;
+                document.getElementById("lowSeverityNum").textContent = data.severity_counts.LOW || 0;
+
+                // Render findings
+                const findingsList = document.getElementById("findingsList");
+                findingsList.innerHTML = "";
+
+                data.findings.forEach(finding => {
+                    const findingDiv = document.createElement("div");
+                    findingDiv.className = "finding-row";
+                    findingDiv.style.cursor = "pointer";
+                    findingDiv.innerHTML = `
+                        <div class="finding-header">
+                            <div>
+                                <div class="finding-id">${finding.finding_id}</div>
+                                <div class="finding-reason">${finding.reason}</div>
+                                <div class="finding-detail">
+                                    <strong>Event:</strong> ${finding.event_type} | 
+                                    <strong>Resource:</strong> ${finding.resource || 'N/A'} | 
+                                    <strong>Source:</strong> ${finding.source || 'N/A'}
+                                </div>
+                            </div>
+                            <div class="severity-${finding.severity}">${finding.severity}</div>
+                        </div>
+                        <div class="finding-meta">
+                            <span>📋 Evidence: <a href="#" class="evidence-link">${finding.evidence_code}</a></span>
+                            <span>🕐 ${finding.timestamp || 'N/A'}</span>
+                            <span>📌 Status: ${finding.status}</span>
+                        </div>
+                    `;
+                    
+                    findingDiv.addEventListener("click", () => {
+                        showFindingDetails(finding);
+                    });
+                    
+                    findingsList.appendChild(findingDiv);
+                });
+
+                document.getElementById("analysisResults").style.display = "block";
+                document.getElementById("noFindingsState").style.display = "none";
+            } catch (error) {
+                showPhase2Alert("Error loading findings: " + error.message, "error");
+            }
+        }
+
+        function showFindingDetails(finding) {
+            const modal = document.getElementById("findingModal");
+            const modalBody = document.getElementById("findingModalBody");
+            const modalTitle = document.getElementById("findingModalTitle");
+
+            modalTitle.textContent = `Finding: ${finding.finding_id}`;
+
+            modalBody.innerHTML = `
+                <div class="finding-modal-section">
+                    <div class="section-title">Event Observed</div>
+                    <div class="section-content">
+                        <strong>${finding.event_type}</strong> to <strong>${finding.resource || 'N/A'}</strong> from <strong>${finding.source || 'Unknown'}</strong>
+                        <br>
+                        Timestamp: ${finding.timestamp}
+                    </div>
+                </div>
+
+                <div class="finding-modal-section">
+                    <div class="section-title">How Was This Flagged?</div>
+                    <div class="how-flagged">
+                        <div class="how-flagged-title">📌 Detection Rule</div>
+                        <div class="how-flagged-content">${finding.reason}</div>
+                    </div>
+                </div>
+
+                <div class="finding-modal-section">
+                    <div class="section-title">Technical Observation</div>
+                    <div class="section-content">${finding.technical_observation}</div>
+                </div>
+
+                <div class="finding-modal-section">
+                    <div class="section-title">Plain Language Explanation</div>
+                    <div class="section-content">${finding.plain_language_explanation}</div>
+                </div>
+
+                <div class="finding-modal-section">
+                    <div class="section-title">Trace to Evidence</div>
+                    <div class="section-content">
+                        Evidence ID: <strong>${finding.evidence_code}</strong><br>
+                        Event ID: <strong>${finding.event_id}</strong><br>
+                        Severity: <span class="severity-${finding.severity}">${finding.severity}</span>
+                    </div>
+                </div>
+            `;
+
+            modal.classList.add("show");
+        }
+
+        function showPhase2Alert(message, type) {
+            const alert = document.getElementById("phase2Alert");
+            alert.textContent = message;
+            alert.className = `alert show alert-${type}`;
+            setTimeout(() => {
+                alert.classList.remove("show");
+            }, 5000);
+        }
+
+        // Phase 3: Visual Analysis
+        let phase3CaseId = null;
+
+        function sanitizeText(value, fallback = "Not recorded") {
+            const normalized = (value || "").toString().trim();
+            return normalized ? normalized : fallback;
+        }
+
+        function showPhase3Alert(message, type) {
+            const alert = document.getElementById("phase3Alert");
+            alert.textContent = message;
+            alert.className = `alert show alert-${type}`;
+            setTimeout(() => {
+                alert.classList.remove("show");
+            }, 5000);
+        }
+
+        function setupPhase3EventListeners() {
+            document.getElementById("phase3CaseSelect").addEventListener("change", (e) => {
+                phase3CaseId = e.target.value ? parseInt(e.target.value) : null;
+                updatePhase3UI();
+            });
+        }
+
+        async function loadPhase3Cases() {
+            try {
+                const response = await fetch("/cases");
+                const data = await response.json();
+
+                const select = document.getElementById("phase3CaseSelect");
+                select.innerHTML = '<option value="">-- Select a case --</option>';
+
+                if (data.cases && data.cases.length > 0) {
+                    data.cases.forEach(caseItem => {
+                        const option = document.createElement("option");
+                        option.value = caseItem.id;
+                        option.textContent = `${caseItem.case_number} - ${caseItem.title}`;
+                        select.appendChild(option);
+                    });
+                }
+            } catch (error) {
+                console.error("Error loading cases:", error);
+            }
+        }
+
+        async function updatePhase3UI() {
+            if (!phase3CaseId) {
+                document.getElementById("timelineView").style.display = "none";
+                document.getElementById("timelineEmpty").style.display = "block";
+                document.getElementById("evidenceFindingsView").style.display = "none";
+                document.getElementById("evidenceFindingsEmpty").style.display = "block";
+                document.getElementById("sourceActivityView").style.display = "none";
+                document.getElementById("sourceActivityEmpty").style.display = "block";
+                document.getElementById("phase3FindingsList").innerHTML = "";
+                document.getElementById("phase3FindingsEmpty").style.display = "block";
+                return;
+            }
+
+            try {
+                const [eventsRes, findingsRes, evidenceRes] = await Promise.all([
+                    fetch(`/cases/${phase3CaseId}/events`),
+                    fetch(`/cases/${phase3CaseId}/findings`),
+                    fetch(`/cases/${phase3CaseId}/evidence`),
+                ]);
+
+                if (!eventsRes.ok || !findingsRes.ok || !evidenceRes.ok) {
+                    throw new Error("Failed to load case analysis data");
+                }
+
+                const eventsData = await eventsRes.json();
+                const findingsData = await findingsRes.json();
+                const evidenceData = await evidenceRes.json();
+
+                const events = eventsData.events || [];
+                const findings = findingsData.findings || [];
+                const evidence = evidenceData.evidence || [];
+
+                renderTimelineList(events);
+                renderEvidenceFindings(evidence, findings);
+                renderSourceActivity(events);
+                renderPhase3FindingsReference(findings);
+            } catch (error) {
+                console.error("Error loading Phase 3 data:", error);
+                showPhase3Alert(`Error loading visual analysis: ${error.message}`, "error");
+            }
+        }
+
+        function renderTimelineList(events) {
+            const timelineList = document.getElementById("timelineList");
+            timelineList.innerHTML = "";
+
+            if (!events || events.length === 0) {
+                document.getElementById("timelineView").style.display = "none";
+                document.getElementById("timelineEmpty").style.display = "block";
+                document.getElementById("timelineEmpty").innerHTML = "<p>No events available for this case.</p>";
+                return;
+            }
+
+            const sortedEvents = [...events].sort((a, b) => sanitizeText(a.timestamp, "zzzz").localeCompare(sanitizeText(b.timestamp, "zzzz")));
+            document.getElementById("timelineView").style.display = "block";
+            document.getElementById("timelineEmpty").style.display = "none";
+
+            sortedEvents.slice(0, 40).forEach(event => {
+                const findingCount = (event.findings || []).length;
+                const row = document.createElement("div");
+                row.style.cssText = "background: #fff; border: 1px solid #e3e6eb; border-left: 4px solid #0f3460; border-radius: 4px; padding: 10px;";
+                row.innerHTML = `
+                    <div style="font-size: 12px; color: #1a1a2e; font-weight: 600;">${sanitizeText(event.timestamp)}</div>
+                    <div style="font-size: 12px; color: #444; margin-top: 4px;">Event ${sanitizeText(event.event_id)} | ${sanitizeText(event.event_type)} | Source ${sanitizeText(event.source)} | Resource ${sanitizeText(event.resource)}</div>
+                    <div style="font-size: 12px; color: #666; margin-top: 3px;">Findings linked: ${findingCount}</div>
+                `;
+                timelineList.appendChild(row);
+            });
+
+            if (sortedEvents.length > 40) {
+                const note = document.createElement("div");
+                note.style.cssText = "font-size: 12px; color: #666; margin-top: 8px;";
+                note.textContent = `Showing first 40 of ${sortedEvents.length} timeline events.`;
+                timelineList.appendChild(note);
+            }
+        }
+
+        function renderEvidenceFindings(evidence, findings) {
+            const container = document.getElementById("evidenceFindingsList");
+            container.innerHTML = "";
+
+            if (!evidence || evidence.length === 0) {
+                document.getElementById("evidenceFindingsView").style.display = "none";
+                document.getElementById("evidenceFindingsEmpty").style.display = "block";
+                document.getElementById("evidenceFindingsEmpty").innerHTML = "<p>No evidence available for this case.</p>";
+                return;
+            }
+
+            document.getElementById("evidenceFindingsView").style.display = "block";
+            document.getElementById("evidenceFindingsEmpty").style.display = "none";
+
+            const findingMap = {};
+            (findings || []).forEach(finding => {
+                const key = String(finding.evidence_id);
+                if (!findingMap[key]) {
+                    findingMap[key] = [];
+                }
+                findingMap[key].push(finding);
+            });
+
+            evidence.forEach(ev => {
+                const key = String(ev.id);
+                const linked = findingMap[key] || [];
+
+                const card = document.createElement("div");
+                card.style.cssText = "background: #fff; border: 1px solid #e3e6eb; border-radius: 4px; padding: 12px;";
+
+                let findingsHtml = "";
+                if (linked.length === 0) {
+                    findingsHtml = "<div style='font-size: 12px; color: #666; margin-top: 8px;'>No findings associated.</div>";
+                } else {
+                    findingsHtml = linked.map(finding => {
+                        return `<div style='margin-top: 8px; padding: 8px; background: #f8fafc; border: 1px solid #e8edf2; border-radius: 4px; cursor: pointer;' data-finding-id='${finding.finding_id}'>
+                            <div style='font-size: 12px; color: #1a1a2e; font-weight: 600;'>${sanitizeText(finding.finding_id)} | ${sanitizeText(finding.severity)}</div>
+                            <div style='font-size: 12px; color: #555; margin-top: 2px;'>Event ${sanitizeText(finding.event_id)} | ${sanitizeText(finding.reason)}</div>
+                        </div>`;
+                    }).join("");
+                }
+
+                card.innerHTML = `
+                    <div style="font-size: 13px; color: #0f3460; font-weight: 700;">Evidence ${sanitizeText(ev.evidence_id)}</div>
+                    <div style="font-size: 12px; color: #555; margin-top: 4px;">${sanitizeText(ev.original_filename)}</div>
+                    ${findingsHtml}
+                `;
+
+                card.querySelectorAll("[data-finding-id]").forEach(node => {
+                    node.addEventListener("click", () => openFindingDetails(node.getAttribute("data-finding-id")));
+                });
+
+                container.appendChild(card);
+            });
+        }
+
+        function renderSourceActivity(events) {
+            const bars = document.getElementById("sourceActivityBars");
+            bars.innerHTML = "";
+
+            if (!events || events.length === 0) {
+                document.getElementById("sourceActivityView").style.display = "none";
+                document.getElementById("sourceActivityEmpty").style.display = "block";
+                document.getElementById("sourceActivityEmpty").innerHTML = "<p>No source activity available for this case.</p>";
+                return;
+            }
+
+            const sourceMap = {};
+            events.forEach(event => {
+                const source = sanitizeText(event.source, "Unknown source");
+                const resource = sanitizeText(event.resource, "Unknown resource");
+
+                if (!sourceMap[source]) {
+                    sourceMap[source] = { count: 0, resourceFreq: {} };
+                }
+
+                sourceMap[source].count += 1;
+                sourceMap[source].resourceFreq[resource] = (sourceMap[source].resourceFreq[resource] || 0) + 1;
+            });
+
+            const rows = Object.entries(sourceMap)
+                .map(([source, meta]) => {
+                    const topResource = Object.entries(meta.resourceFreq).sort((a, b) => b[1] - a[1])[0] || ["Unknown resource", 0];
+                    return {
+                        source,
+                        count: meta.count,
+                        topResource: topResource[0],
+                    };
+                })
+                .sort((a, b) => b.count - a.count)
+                .slice(0, 20);
+
+            const maxCount = Math.max(...rows.map(r => r.count), 1);
+            document.getElementById("sourceActivityView").style.display = "block";
+            document.getElementById("sourceActivityEmpty").style.display = "none";
+
+            rows.forEach(row => {
+                const widthPct = Math.max(6, Math.round((row.count / maxCount) * 100));
+                const item = document.createElement("div");
+                item.style.cssText = "background: #fff; border: 1px solid #e3e6eb; border-radius: 4px; padding: 10px;";
+                item.innerHTML = `
+                    <div style="font-size: 12px; color: #1a1a2e; font-weight: 600; margin-bottom: 6px;">${sanitizeText(row.source)}</div>
+                    <div style="height: 12px; background: #e8eef7; border-radius: 999px; overflow: hidden;">
+                        <div style="height: 12px; width: ${widthPct}%; background: linear-gradient(90deg, #0f3460, #3c5f8f);"></div>
+                    </div>
+                    <div style="font-size: 12px; color: #555; margin-top: 6px;">Events: ${row.count} | Top resource: ${sanitizeText(row.topResource)}</div>
+                `;
+                bars.appendChild(item);
+            });
+        }
+
+        async function openFindingDetails(findingId) {
+            try {
+                const response = await fetch(`/findings/${encodeURIComponent(findingId)}`);
+                if (!response.ok) {
+                    throw new Error("Finding not found");
+                }
+                const finding = await response.json();
+                showFindingDetails(finding);
+            } catch (error) {
+                showPhase3Alert(`Unable to load finding details: ${error.message}`, "error");
+            }
+        }
+
+        function renderPhase3FindingsReference(findings) {
+            const list = document.getElementById("phase3FindingsList");
+            const empty = document.getElementById("phase3FindingsEmpty");
+            list.innerHTML = "";
+
+            if (!findings || findings.length === 0) {
+                empty.style.display = "block";
+                return;
+            }
+
+            empty.style.display = "none";
+
+            findings.forEach(finding => {
+                const item = document.createElement("div");
+                item.style.cssText = "padding: 10px; border: 1px solid #e3e6eb; border-radius: 4px; margin-bottom: 8px; cursor: pointer; background: #fbfcfe;";
+                item.innerHTML = `
+                    <div style="font-size: 12px; color: #1a1a2e; font-weight: 600; margin-bottom: 4px;">${sanitizeText(finding.finding_id)} • ${sanitizeText(finding.severity)}</div>
+                    <div style="font-size: 12px; color: #666;">Evidence ${sanitizeText(finding.evidence_code)} • Event ${sanitizeText(finding.event_id)}</div>
+                    <div style="font-size: 12px; color: #444; margin-top: 4px;">${sanitizeText(finding.reason)}</div>
+                `;
+                item.addEventListener("click", () => openFindingDetails(finding.finding_id));
+                list.appendChild(item);
+            });
+        }
+
+        // Initialize Phase 3 on page load
+        document.addEventListener("DOMContentLoaded", () => {
+            setupPhase3EventListeners();
+            setupPhase4EventListeners();
+            // Load Phase 3 cases when page loads or when Phase 3 is shown
+        });
+
+        // Phase 4: Case Summary
+        let phase4CaseId = null;
+        let phase4FindingsCache = {};
+
+        function setupPhase4EventListeners() {
+            document.getElementById("phase4CaseSelect").addEventListener("change", (e) => {
+                phase4CaseId = e.target.value ? parseInt(e.target.value) : null;
+                updatePhase4UI();
+            });
+        }
+
+        async function loadPhase4Cases() {
+            try {
+                const response = await fetch("/cases");
+                const data = await response.json();
+                
+                const select = document.getElementById("phase4CaseSelect");
+                select.innerHTML = '<option value="">-- Select a case --</option>';
+                
+                if (data.cases && data.cases.length > 0) {
+                    data.cases.forEach(caseItem => {
+                        const option = document.createElement("option");
+                        option.value = caseItem.id;
+                        option.textContent = `${caseItem.case_number} - ${caseItem.title}`;
+                        select.appendChild(option);
+                    });
+                }
+            } catch (error) {
+                console.error("Error loading cases:", error);
+            }
+        }
+
+        async function updatePhase4UI() {
+            if (!phase4CaseId) {
+                document.getElementById("caseOverviewSection").style.display = "none";
+                document.getElementById("keyFindingsSection").style.display = "none";
+                document.getElementById("overallInterpretationSection").style.display = "none";
+                document.getElementById("limitationsSection").style.display = "none";
+                document.getElementById("caseEmptyState").style.display = "block";
+                return;
+            }
+
+            try {
+                // Load case details
+                const casesRes = await fetch("/cases");
+                const casesData = casesRes.json();
+                
+                // Load evidence
+                const evidenceRes = await fetch(`/cases/${phase4CaseId}/evidence`);
+                const evidenceData = await evidenceRes.json();
+                
+                // Load events
+                const eventsRes = await fetch(`/cases/${phase4CaseId}/events`);
+                const eventsData = await eventsRes.json();
+                
+                // Load findings
+                const findingsRes = await fetch(`/cases/${phase4CaseId}/findings`);
+                const findingsData = await findingsRes.json();
+                
+                // Render all sections
+                await renderCaseOverview(casesData, evidenceData, eventsData, findingsData);
+                renderKeyFindings(findingsData);
+                renderOverallInterpretation(findingsData);
+                renderLimitations();
+                
+                document.getElementById("caseEmptyState").style.display = "none";
+            } catch (error) {
+                console.error("Error loading Phase 4 data:", error);
+            }
+        }
+
+        async function renderCaseOverview(casesData, evidenceData, eventsData, findingsData) {
+            const casesDataResolved = await casesData;
+            const caseItem = casesDataResolved.cases.find(c => c.id === phase4CaseId);
+            
+            const container = document.getElementById("caseOverviewContent");
+            container.innerHTML = `
+                <div style="padding: 15px; background: #f5f7fa; border-radius: 4px;">
+                    <div style="font-size: 12px; color: #999; margin-bottom: 5px; text-transform: uppercase; font-weight: 600;">Case Number</div>
+                    <div style="font-size: 16px; color: #1a1a2e; font-weight: 600;">${caseItem ? caseItem.case_number : 'N/A'}</div>
+                </div>
+                <div style="padding: 15px; background: #f5f7fa; border-radius: 4px;">
+                    <div style="font-size: 12px; color: #999; margin-bottom: 5px; text-transform: uppercase; font-weight: 600;">Investigator</div>
+                    <div style="font-size: 16px; color: #1a1a2e; font-weight: 600;">${caseItem ? caseItem.investigator : 'N/A'}</div>
+                </div>
+                <div style="padding: 15px; background: #f5f7fa; border-radius: 4px;">
+                    <div style="font-size: 12px; color: #999; margin-bottom: 5px; text-transform: uppercase; font-weight: 600;">Total Evidence</div>
+                    <div style="font-size: 16px; color: #1a1a2e; font-weight: 600;">${evidenceData.evidence.length}</div>
+                </div>
+                <div style="padding: 15px; background: #f5f7fa; border-radius: 4px;">
+                    <div style="font-size: 12px; color: #999; margin-bottom: 5px; text-transform: uppercase; font-weight: 600;">Total Events</div>
+                    <div style="font-size: 16px; color: #1a1a2e; font-weight: 600;">${eventsData.total_events}</div>
+                </div>
+                <div style="padding: 15px; background: #f5f7fa; border-radius: 4px;">
+                    <div style="font-size: 12px; color: #999; margin-bottom: 5px; text-transform: uppercase; font-weight: 600;">Total Findings</div>
+                    <div style="font-size: 16px; color: #1a1a2e; font-weight: 600;">${findingsData.total_findings}</div>
+                </div>
+                <div style="padding: 15px; background: #f5f7fa; border-radius: 4px;">
+                    <div style="font-size: 12px; color: #999; margin-bottom: 5px; text-transform: uppercase; font-weight: 600;">Case Title</div>
+                    <div style="font-size: 14px; color: #1a1a2e;">${caseItem ? caseItem.title : 'N/A'}</div>
+                </div>
+                <div style="padding: 15px; background: #f5f7fa; border-radius: 4px;">
+                    <div style="font-size: 12px; color: #999; margin-bottom: 5px; text-transform: uppercase; font-weight: 600;">High Severity</div>
+                    <div style="font-size: 16px; color: #721c24; font-weight: 600;">${findingsData.severity_counts.HIGH}</div>
+                </div>
+            `;
+            
+            document.getElementById("caseOverviewSection").style.display = "block";
+        }
+
+        function renderKeyFindings(findingsData) {
+            const container = document.getElementById("findingsSummaryContainer");
+            container.innerHTML = "";
+            
+            if (!findingsData.findings || findingsData.findings.length === 0) {
+                container.innerHTML = '<p style="text-align: center; color: #999; padding: 30px;">No findings to display</p>';
+                document.getElementById("keyFindingsSection").style.display = "block";
+                return;
+            }
+
+            // Cache findings for later lookup
+            phase4FindingsCache = {};
+            
+            findingsData.findings.forEach((finding, idx) => {
+                phase4FindingsCache[idx] = finding;
+                
+                const card = document.createElement("div");
+                card.style.cssText = `
+                    background: white;
+                    border: 1px solid #e0e0e0;
+                    border-left: 4px solid #0f3460;
+                    border-radius: 4px;
+                    padding: 20px;
+                    margin-bottom: 20px;
+                    cursor: pointer;
+                    transition: all 0.3s;
+                `;
+                
+                card.onmouseover = () => card.style.boxShadow = "0 4px 12px rgba(0,0,0,0.1)";
+                card.onmouseout = () => card.style.boxShadow = "none";
+
+                const severityColor = finding.severity === "HIGH" ? "#721c24" : finding.severity === "MEDIUM" ? "#856404" : "#0c5460";
+                const severityBg = finding.severity === "HIGH" ? "#f8d7da" : finding.severity === "MEDIUM" ? "#fff3cd" : "#d1ecf1";
+
+                card.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
+                        <div>
+                            <div style="font-size: 12px; color: #999; font-weight: 600; margin-bottom: 5px;">FINDING ${idx + 1}</div>
+                            <div style="font-size: 16px; color: #1a1a2e; font-weight: 600; margin-bottom: 5px;">${finding.reason}</div>
+                            <div style="font-size: 12px; color: #666; font-family: monospace;">${finding.finding_id}</div>
+                        </div>
+                        <span style="background: ${severityBg}; color: ${severityColor}; padding: 6px 12px; border-radius: 3px; font-weight: 600; font-size: 12px; white-space: nowrap;">${finding.severity}</span>
+                    </div>
+
+                    <div style="background: #f9fafb; padding: 12px; border-radius: 4px; margin-bottom: 15px;">
+                        <div style="font-size: 12px; color: #999; font-weight: 600; margin-bottom: 5px; text-transform: uppercase;">For Non-Technical Stakeholders</div>
+                        <div style="font-size: 14px; color: #1a1a2e; line-height: 1.6;">${finding.plain_language_explanation}</div>
+                    </div>
+
+                    <div style="border-top: 1px solid #e0e0e0; padding-top: 12px;">
+                        <button class="btn btn-secondary" style="padding: 8px 16px; font-size: 12px; width: auto;" 
+                            onclick="showCaseSummaryFindingDetails(${idx})">
+                            View Technical Details
+                        </button>
+                    </div>
+                `;
+
+                container.appendChild(card);
+            });
+
+            document.getElementById("keyFindingsSection").style.display = "block";
+        }
+
+        function renderOverallInterpretation(findingsData) {
+            const container = document.getElementById("overallInterpretationContent");
+            
+            if (!findingsData.findings || findingsData.findings.length === 0) {
+                container.innerHTML = "<p style='color: #999;'>No findings to interpret</p>";
+                document.getElementById("overallInterpretationSection").style.display = "block";
+                return;
+            }
+
+            const highCount = findingsData.severity_counts.HIGH || 0;
+            const mediumCount = findingsData.severity_counts.MEDIUM || 0;
+            const lowCount = findingsData.severity_counts.LOW || 0;
+            
+            let interpretation = `<p style="margin-bottom: 15px;">`;
+            interpretation += `This case analysis identified <strong>${findingsData.total_findings} event(s) of interest</strong>: `;
+            interpretation += `${highCount} high-severity, ${mediumCount} medium-severity, and ${lowCount} low-severity.`;
+            interpretation += `</p>`;
+            
+            interpretation += `<p style="margin-bottom: 15px;">`;
+            interpretation += `The evidence shows patterns consistent with the configured detection rules. `;
+            interpretation += `These patterns may warrant further investigation or remediation depending on organizational policies.`;
+            interpretation += `</p>`;
+            
+            interpretation += `<p>`;
+            interpretation += `All findings are based on objective observations from the available evidence files. `;
+            interpretation += `The conclusions presented do not make claims about intent, identity, or responsibility without supporting evidence.`;
+            interpretation += `</p>`;
+            
+            container.innerHTML = interpretation;
+            document.getElementById("overallInterpretationSection").style.display = "block";
+        }
+
+        function renderLimitations() {
+            const container = document.getElementById("limitationsContent");
+            
+            let limitations = `<ul style="margin-left: 20px; line-height: 1.8;">`;
+            limitations += `<li><strong>Identity Unknown:</strong> The available evidence does not establish the identity of the person operating the system(s).</li>`;
+            limitations += `<li><strong>Intent Not Determined:</strong> The evidence shows actions taken but does not prove intent or motivation.</li>`;
+            limitations += `<li><strong>Incomplete Context:</strong> The forensic evidence provides a point-in-time view and may not capture the full context of user actions.</li>`;
+            limitations += `<li><strong>Non-Repudiation:</strong> Digital evidence does not provide non-repudiation in all cases without additional corroborating evidence.</li>`;
+            limitations += `<li><strong>Clock Accuracy:</strong> Timestamp accuracy depends on the reliability of system clocks at the time of logging.</li>`;
+            limitations += `<li><strong>Log Completeness:</strong> Some evidence may be incomplete, corrupted, or missing due to log rotation or system errors.</li>`;
+            limitations += `</ul>`;
+            
+            container.innerHTML = limitations;
+            document.getElementById("limitationsSection").style.display = "block";
+        }
+
+        function showCaseSummaryFindingDetails(findingIndex) {
+            const finding = phase4FindingsCache[findingIndex];
+            if (!finding) {
+                console.error("Finding not found:", findingIndex);
+                return;
+            }
+
+            const modal = document.getElementById("findingModal");
+            const modalBody = document.getElementById("findingModalBody");
+            const modalTitle = document.getElementById("findingModalTitle");
+
+            modalTitle.textContent = `${finding.finding_id} - Technical Details`;
+
+            const severityColor = finding.severity === "HIGH" ? "#721c24" : finding.severity === "MEDIUM" ? "#856404" : "#0c5460";
+            const severityBg = finding.severity === "HIGH" ? "#f8d7da" : finding.severity === "MEDIUM" ? "#fff3cd" : "#d1ecf1";
+
+            modalBody.innerHTML = `
+                <div class="finding-modal-section">
+                    <div class="section-title">Event Observed</div>
+                    <div class="section-content">
+                        <strong>${finding.event_type || 'N/A'}</strong> to <strong>${finding.resource || 'N/A'}</strong><br>
+                        Source: <strong>${finding.source || 'Unknown'}</strong><br>
+                        Timestamp: ${finding.timestamp || 'N/A'}
+                    </div>
+                </div>
+
+                <div class="finding-modal-section">
+                    <div class="section-title">Technical Observation</div>
+                    <div class="section-content">${finding.technical_observation || 'No additional details'}</div>
+                </div>
+
+                <div class="finding-modal-section">
+                    <div class="section-title">Detection Rule Applied</div>
+                    <div class="how-flagged">
+                        <div class="how-flagged-title">📌 Rule</div>
+                        <div class="how-flagged-content">${finding.reason || 'No rule information'}</div>
+                    </div>
+                </div>
+
+                <div class="finding-modal-section">
+                    <div class="section-title">Finding References</div>
+                    <div class="section-content">
+                        Finding ID: <strong>${finding.finding_id}</strong><br>
+                        Evidence ID: <strong>${finding.evidence_code || 'N/A'}</strong><br>
+                        Event ID: <strong>${finding.event_id || 'N/A'}</strong><br>
+                        Severity: <span style="background: ${severityBg}; color: ${severityColor}; padding: 2px 6px; border-radius: 3px; font-weight: 600; font-size: 12px;">${finding.severity}</span>
+                    </div>
+                </div>
+
+                <div class="finding-modal-section">
+                    <div class="section-title">Important Notes</div>
+                    <div class="section-content" style="font-size: 12px; color: #666; line-height: 1.6;">
+                        This finding is based on objective observations from the evidence. It does not make claims about the identity, intent, or responsibility of any person without explicit supporting evidence.
+                    </div>
+                </div>
+            `;
+
+            modal.classList.add("show");
+        }
+
+        // Phase 5: Report Generation
+        let phase5CaseId = null;
+        let phase5ReportData = {};
+
+        function setupPhase5EventListeners() {
+            document.getElementById("phase5CaseSelect").addEventListener("change", (e) => {
+                phase5CaseId = e.target.value ? parseInt(e.target.value) : null;
+                updatePhase5UI();
+            });
+        }
+
+        async function loadPhase5Cases() {
+            try {
+                const response = await fetch("/cases");
+                const data = await response.json();
+                
+                const select = document.getElementById("phase5CaseSelect");
+                select.innerHTML = '<option value="">-- Select a case --</option>';
+                
+                if (data.cases && data.cases.length > 0) {
+                    data.cases.forEach(caseItem => {
+                        const option = document.createElement("option");
+                        option.value = caseItem.id;
+                        option.textContent = `${caseItem.case_number} - ${caseItem.title}`;
+                        select.appendChild(option);
+                    });
+                }
+            } catch (error) {
+                console.error("Error loading cases:", error);
+            }
+        }
+
+        function updatePhase5UI() {
+            if (!phase5CaseId) {
+                document.getElementById("reportGenerationUI").style.display = "none";
+                document.getElementById("reportEmptyState").style.display = "block";
+                document.getElementById("reportOutput").style.display = "none";
+                return;
+            }
+
+            document.getElementById("reportGenerationUI").style.display = "block";
+            document.getElementById("reportEmptyState").style.display = "none";
+            document.getElementById("reportOutput").style.display = "none";
+        }
+
+        async function generatePDFReport() {
+            if (!phase5CaseId) {
+                alert("Please select a case");
+                return;
+            }
+
+            const button = event.target;
+            button.disabled = true;
+            button.textContent = "⏳ Generating Report...";
+
+            try {
+                const response = await fetch(`/cases/${phase5CaseId}/report`, {
+                    method: "POST"
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    alert(`Error: ${error.detail}`);
+                    return;
+                }
+
+                const data = await response.json();
+                
+                // Store report data
+                phase5ReportData = data.report;
+
+                // Display success message
+                document.getElementById("reportFilename").textContent = data.report.filename;
+                document.getElementById("reportHash").textContent = data.report.sha256;
+                document.getElementById("reportOutput").style.display = "block";
+
+                button.disabled = false;
+                button.textContent = "📥 Generate PDF Report";
+
+            } catch (error) {
+                console.error("Error generating report:", error);
+                alert(`Error: ${error.message}`);
+                button.disabled = false;
+                button.textContent = "📥 Generate PDF Report";
+            }
+        }
+
+        function downloadPDFReport() {
+            if (!phase5ReportData.path) {
+                alert("No report generated yet");
+                return;
+            }
+
+            // Create a download link
+            const link = document.createElement("a");
+            link.href = `/cases/${phase5CaseId}/download?path=${encodeURIComponent(phase5ReportData.path)}`;
+            link.download = phase5ReportData.filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function viewPDFReport() {
+            if (!phase5ReportData.path) {
+                alert("No report generated yet");
+                return;
+            }
+
+            // Open in new tab
+            window.open(`/cases/${phase5CaseId}/download?path=${encodeURIComponent(phase5ReportData.path)}`, '_blank');
+        }
+
+        // Initialize Phase 5 on page load
+        document.addEventListener("DOMContentLoaded", () => {
+            setupPhase3EventListeners();
+            setupPhase4EventListeners();
+            setupPhase5EventListeners();
+        });
+
+        // Override showPage to also handle Phase 3, Phase 4, and Phase 5 loading
+        const originalShowPage = showPage;
+        showPage = function(pageName) {
+            originalShowPage(pageName);
+            if (pageName === "phase3") {
+                loadPhase3Cases();
+            }
+            if (pageName === "phase4") {
+                loadPhase4Cases();
+            }
+            if (pageName === "phase5") {
+                loadPhase5Cases();
+            }
+        };
+    </script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+# Python virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python caches and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# SQLite databases and sidecar files
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Preserved original evidence and analysis working copies
+uploads/original/
+uploads/working/
+
+# Generated reports
+reports/
+
+# Environment variables, secrets and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+secrets/
+credentials/
+
+# Temporary and operating-system files
+*.tmp
+*.temp
+*.log
+*.bak
+~$*
+.DS_Store
+Thumbs.db
