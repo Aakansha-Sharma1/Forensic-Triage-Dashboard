@@ -2,6 +2,8 @@ import sqlite3
 import os
 from pathlib import Path
 
+from .audit import initialize_audit_table, protect_audit_records
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = Path(os.environ.get("FORENSIC_INSIGHT_DB_PATH", str(BASE_DIR / "forensic.db")))
 
@@ -64,23 +66,6 @@ def initialize_database():
 
     connection.execute(
         """
-        CREATE TABLE IF NOT EXISTS audit_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_id TEXT NOT NULL UNIQUE,
-            timestamp TEXT NOT NULL,
-            action_type TEXT NOT NULL,
-            case_id INTEGER,
-            evidence_id TEXT,
-            outcome TEXT NOT NULL,
-            metadata TEXT NOT NULL,
-            previous_hash TEXT NOT NULL,
-            current_hash TEXT NOT NULL UNIQUE
-        )
-        """
-    )
-
-    connection.execute(
-        """
         CREATE TABLE IF NOT EXISTS findings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             finding_id TEXT NOT NULL UNIQUE,
@@ -100,6 +85,9 @@ def initialize_database():
         )
         """
     )
+
+    initialize_audit_table(connection)
+    protect_audit_records(connection)
 
     connection.commit()
     connection.close()

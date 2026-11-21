@@ -3,9 +3,13 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
+import sqlite3
+import threading
 
 
 AUDIT_TABLE = "audit_events"
+
+_AUDIT_LOCK = threading.RLock()
 
 
 def utc_timestamp() -> str:
@@ -67,58 +71,59 @@ def append_audit_event(
     outcome: str,
     metadata: dict | None = None,
 ) -> dict:
-    latest = connection.execute(
-        "SELECT current_hash FROM audit_events ORDER BY id DESC LIMIT 1"
-    ).fetchone()
-    previous_hash = latest[0] if latest else "0" * 64
+    with _AUDIT_LOCK:
+        latest = connection.execute(
+            "SELECT current_hash FROM audit_events ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        previous_hash = latest[0] if latest else "0" * 64
 
-    event_id = f"AUD-{uuid4().hex.upper()}"
-    timestamp = utc_timestamp()
-    metadata_text = canonical_metadata(metadata)
-    metadata_object = json.loads(metadata_text)
-    normalized_evidence_id = str(evidence_id) if evidence_id is not None else None
-    current_hash = calculate_audit_hash(
-        event_id,
-        timestamp,
-        action_type,
-        case_id,
-        normalized_evidence_id,
-        outcome,
-        metadata_object,
-        previous_hash,
-    )
-
-    connection.execute(
-        """
-        INSERT INTO audit_events (
-            event_id, timestamp, action_type, case_id, evidence_id,
-            outcome, metadata, previous_hash, current_hash
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
+        event_id = f"AUD-{uuid4().hex.upper()}"
+        timestamp = utc_timestamp()
+        metadata_text = canonical_metadata(metadata)
+        metadata_object = json.loads(metadata_text)
+        normalized_evidence_id = str(evidence_id) if evidence_id is not None else None
+        current_hash = calculate_audit_hash(
             event_id,
             timestamp,
             action_type,
             case_id,
-            str(evidence_id) if evidence_id is not None else None,
+            normalized_evidence_id,
             outcome,
-            metadata_text,
+            metadata_object,
             previous_hash,
-            current_hash,
-        ),
-    )
+        )
 
-    return {
-        "event_id": event_id,
-        "timestamp": timestamp,
-        "action_type": action_type,
-        "case_id": case_id,
-        "evidence_id": str(evidence_id) if evidence_id is not None else None,
-        "outcome": outcome,
-        "metadata": metadata_object,
-        "previous_hash": previous_hash,
-        "current_hash": current_hash,
-    }
+        connection.execute(
+            """
+            INSERT INTO audit_events (
+                event_id, timestamp, action_type, case_id, evidence_id,
+                outcome, metadata, previous_hash, current_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                timestamp,
+                action_type,
+                case_id,
+                str(evidence_id) if evidence_id is not None else None,
+                outcome,
+                metadata_text,
+                previous_hash,
+                current_hash,
+            ),
+        )
+
+        return {
+            "event_id": event_id,
+            "timestamp": timestamp,
+            "action_type": action_type,
+            "case_id": case_id,
+            "evidence_id": str(evidence_id) if evidence_id is not None else None,
+            "outcome": outcome,
+            "metadata": metadata_object,
+            "previous_hash": previous_hash,
+            "current_hash": current_hash,
+        }
 
 
 def verify_audit_chain(connection) -> dict:
@@ -180,3 +185,58 @@ def verify_audit_chain(connection) -> dict:
         "event_count": len(rows),
         "issues": issues,
     }
+
+
+def protect_audit_records(connection) -> None:
+    """Install SQLite triggers preventing application-level audit record changes/deletion."""
+    connection.execute("DROP TRIGGER IF EXISTS prevent_audit_update")
+    connection.execute("DROP TRIGGER IF EXISTS prevent_audit_delete")
+    connection.execute(
+        """
+        CREATE TRIGGER prevent_audit_update
+        BEFORE UPDATE ON audit_events
+        BEGIN
+            SELECT RAISE(ABORT, 'audit_events records are read-only');
+        END
+        """
+    )
+    connection.execute(
+        """
+        CREATE TRIGGER prevent_audit_delete
+        BEFORE DELETE ON audit_events
+        BEGIN
+            SELECT RAISE(ABORT, 'audit_events records cannot be deleted');
+        END
+        """
+    )
+
+
+def get_audit_history(connection, case_id: int | None = None, evidence_id: int | str | None = None) -> list:
+    """Return audit records in insertion order without exposing mutation APIs."""
+    clauses = []
+    parameters = []
+    if case_id is not None:
+        clauses.append("case_id = ?")
+        parameters.append(case_id)
+    if evidence_id is not None:
+        clauses.append("evidence_id = ?")
+        parameters.append(str(evidence_id))
+
+    query = (
+        "SELECT id, event_id, timestamp, action_type, case_id, evidence_id, outcome, metadata, previous_hash, current_hash "
+        "FROM audit_events"
+    )
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY id ASC"
+
+    rows = connection.execute(query, tuple(parameters)).fetchall()
+    history = []
+    for row in rows:
+        record = dict(row)
+        try:
+            record["metadata"] = json.loads(record["metadata"])
+        except (json.JSONDecodeError, TypeError):
+            record["metadata"] = None
+        history.append(record)
+    return history
