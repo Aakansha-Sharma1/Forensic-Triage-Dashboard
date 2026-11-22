@@ -17,6 +17,16 @@ from .dataset import (
     prepare_apache_source,
     write_processed_dataset,
 )
+from .labels import (
+    LABEL_MANIFEST_FILENAME,
+    LABEL_POLICY_ID,
+    LABEL_SCHEMA_VERSION,
+    LABELLED_RECORDS_FILENAME,
+    LabelPreparationError,
+    RUSSELLMITCHELL_SIMULATION_END,
+    RUSSELLMITCHELL_SIMULATION_START,
+    prepare_labelled_dataset,
+)
 from .schema import (
     FEATURE_SCHEMA,
     FEATURE_SCHEMA_VERSION,
@@ -40,9 +50,16 @@ __all__ = [
     "FeatureRecord",
     "GroundTruthLabel",
     "GroundTruthImport",
+    "LABEL_MANIFEST_FILENAME",
+    "LABEL_POLICY_ID",
+    "LABEL_SCHEMA_VERSION",
+    "LABELLED_RECORDS_FILENAME",
+    "LabelPreparationError",
     "PreparedApacheSource",
     "PreparedDatasetRecord",
     "RejectedRow",
+    "RUSSELLMITCHELL_SIMULATION_END",
+    "RUSSELLMITCHELL_SIMULATION_START",
     "canonicalize_events",
     "create_dataset_manifest",
     "extract_selected_archive_members",
@@ -51,6 +68,7 @@ __all__ = [
     "get_feature_schema",
     "import_ground_truth_labels",
     "parse_apache_access_log",
+    "prepare_labelled_dataset",
     "prepare_apache_source",
     "write_processed_dataset",
 ]
