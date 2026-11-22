@@ -260,6 +260,56 @@ def test_rule_d_negative_small_uniform_transfers(client):
     assert not [item for item in findings if "2+ standard deviations" in item["reason"]]
 
 
+def test_rule_registry_metadata_is_complete_and_deterministic(client):
+    from backend.rules import calculate_rule_fingerprint, get_rule_metadata
+
+    response = client.get("/rules")
+    assert response.status_code == 200
+    metadata = response.json()
+
+    assert [rule["rule_id"] for rule in metadata["rules"]] == ["R-A", "R-B", "R-C", "R-D"]
+    assert {rule["version"] for rule in metadata["rules"]} == {"1.0.0"}
+    assert {rule["severity"] for rule in metadata["rules"]} == {"MEDIUM", "HIGH"}
+    assert metadata["fingerprint"] == calculate_rule_fingerprint()
+    assert len(metadata["fingerprint"]) == 64
+    assert metadata["rules"][0]["detection_conditions"]["status_contains"] == "403"
+    assert metadata["rules"][1]["detection_conditions"]["resource_keywords"] == [
+        "secret", "admin", "password", "confidential", ".zip"
+    ]
+    assert metadata["rules"][2]["detection_conditions"]["minimum_request_count"] == 3
+    assert metadata["rules"][3]["detection_conditions"]["threshold_multiplier"] == 2
+    assert get_rule_metadata()["fingerprint"] == metadata["fingerprint"]
+
+
+def test_new_findings_and_analysis_audit_store_rule_provenance(client):
+    from backend.rules import calculate_rule_fingerprint
+
+    case = create_case(client, "rule-provenance")
+    rows = ["timestamp,source_ip,event_type,resource,status,bytes"]
+    rows.extend(
+        f"2026-01-01 00:00:{index:02d},10.0.0.11,"
+        f"{'POST' if index < 3 else 'GET'},"
+        f"{'/admin' if index == 0 else '/upload' if index < 3 else '/normal'},"
+        f"{'403' if index == 0 else '200'},{100 if index < 9 else 1000000}"
+        for index in range(10)
+    )
+    upload_csv(client, case["id"], "rule-provenance.csv", "\n".join(rows) + "\n")
+
+    analysis = client.post(f"/cases/{case['id']}/analyze")
+    assert analysis.status_code == 200
+    expected_fingerprint = calculate_rule_fingerprint()
+    findings = client.get(f"/cases/{case['id']}/findings").json()["findings"]
+
+    assert {finding["rule_id"] for finding in findings} == {"R-A", "R-B", "R-C", "R-D"}
+    assert all(finding["rule_version"] == "1.0.0" for finding in findings)
+    assert {finding["rule_fingerprint"] for finding in findings} == {expected_fingerprint}
+
+    audit = client.get("/audit", params={"case_id": case["id"]}).json()["history"]
+    completed = [event for event in audit if event["action_type"] == "ANALYSIS_COMPLETED"]
+    assert len(completed) == 1
+    assert completed[0]["metadata"]["rule_fingerprint"] == expected_fingerprint
+
+
 def test_finding_persistence_and_event_reference(client):
     case = create_case(client, "finding-reference")
     evidence = upload_csv(client, case["id"], "finding-reference.csv",
@@ -349,6 +399,10 @@ def test_pdf_report_generation_and_download(client, paths):
     assert evidence["evidence_id"] in report_text
     assert evidence["sha256"] in report_text
     assert "HTTP 403 Forbidden status detected" in report_text
+    assert "Rule ID: R-A" in report_text
+    assert "Rule Version: 1.0.0" in report_text
+    from backend.rules import calculate_rule_fingerprint
+    assert calculate_rule_fingerprint() in report_text
     assert "Report Analyst" in report_text
     assert "Verified" in report_text
     assert "Report test custody" in report_text
@@ -1205,3 +1259,63 @@ def test_audit_schema_migration_for_preexisting_database():
 
     assert {"case_id", "evidence_id"}.issubset(columns)
     assert result["valid"] is True
+
+
+def test_findings_schema_migration_preserves_historical_rows(monkeypatch, tmp_path):
+    from backend.database import initialize_database
+
+    database_path = tmp_path / "legacy-findings.db"
+    connection = sqlite3.connect(database_path)
+    connection.execute(
+        """
+        CREATE TABLE findings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            finding_id TEXT NOT NULL UNIQUE,
+            evidence_id INTEGER NOT NULL,
+            event_id TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            source TEXT,
+            event_type TEXT NOT NULL,
+            resource TEXT,
+            reason TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            technical_observation TEXT NOT NULL,
+            plain_language_explanation TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO findings (
+            finding_id, evidence_id, event_id, timestamp, source, event_type,
+            resource, reason, severity, technical_observation,
+            plain_language_explanation, status, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "FD-HISTORICAL", 1, "0", "2026-01-01T00:00:00Z", "10.0.0.1",
+            "HTTP", "/private", "HTTP 403 Forbidden status detected", "MEDIUM",
+            "Historical observation", "Historical explanation", "Requires Review",
+            "2026-01-01T00:00:00Z",
+        ),
+    )
+    connection.commit()
+    connection.close()
+
+    monkeypatch.setenv("FORENSIC_INSIGHT_DB_PATH", str(database_path))
+    initialize_database()
+
+    connection = sqlite3.connect(database_path)
+    connection.row_factory = sqlite3.Row
+    finding = connection.execute(
+        "SELECT finding_id, reason, rule_id, rule_version, rule_fingerprint FROM findings"
+    ).fetchone()
+    connection.close()
+
+    assert finding["finding_id"] == "FD-HISTORICAL"
+    assert finding["reason"] == "HTTP 403 Forbidden status detected"
+    assert finding["rule_id"] is None
+    assert finding["rule_version"] is None
+    assert finding["rule_fingerprint"] is None

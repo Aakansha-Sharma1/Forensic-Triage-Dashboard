@@ -81,10 +81,20 @@ def initialize_database():
             plain_language_explanation TEXT NOT NULL,
             status TEXT NOT NULL,
             created_at TEXT NOT NULL,
+            rule_id TEXT,
+            rule_version TEXT,
+            rule_fingerprint TEXT,
             FOREIGN KEY (evidence_id) REFERENCES evidence(id)
         )
         """
     )
+
+    finding_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(findings)").fetchall()
+    }
+    for column in ("rule_id", "rule_version", "rule_fingerprint"):
+        if column not in finding_columns:
+            connection.execute(f"ALTER TABLE findings ADD COLUMN {column} TEXT")
 
     initialize_audit_table(connection)
     protect_audit_records(connection)

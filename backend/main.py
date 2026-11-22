@@ -23,6 +23,7 @@ from reportlab.lib import colors
 
 from .database import get_connection, initialize_database
 from .audit import append_audit_event, get_audit_history, verify_audit_chain
+from .rules import RULE_REGISTRY, calculate_rule_fingerprint, get_rule_metadata
 
 
 initialize_database()
@@ -99,7 +100,7 @@ def detect_threats(csv_path: Path, evidence_id: int) -> list:
             pass
         
         # Collect POST requests by source (for RULE C)
-        if 'POST' in event_type.upper():
+        if RULE_REGISTRY["R-C"]["detection_conditions"]["event_type_contains"] in event_type.upper():
             post_requests[source_ip].append({
                 'timestamp': timestamp,
                 'resource': resource,
@@ -108,11 +109,12 @@ def detect_threats(csv_path: Path, evidence_id: int) -> list:
     
     # Calculate baseline for RULE D (unusually large transfers)
     high_byte_threshold = None
-    if byte_values and len(byte_values) > 2:
+    rule_d_conditions = RULE_REGISTRY["R-D"]["detection_conditions"]
+    if len(byte_values) >= rule_d_conditions["minimum_numeric_samples"]:
         try:
             mean = statistics.mean(byte_values)
             stdev = statistics.stdev(byte_values)
-            high_byte_threshold = mean + (2 * stdev)
+            high_byte_threshold = mean + (rule_d_conditions["threshold_multiplier"] * stdev)
         except:
             pass
     
@@ -127,34 +129,38 @@ def detect_threats(csv_path: Path, evidence_id: int) -> list:
         bytes_field = row.get('bytes', '')
         
         # RULE A: HTTP 403 status
-        if '403' in str(status):
+        rule_a = RULE_REGISTRY["R-A"]
+        if rule_a["detection_conditions"]["status_contains"] in str(status):
             finding = {
+                'rule_id': rule_a["rule_id"],
                 'event_id': event_id,
                 'timestamp': timestamp,
                 'source': source_ip,
                 'event_type': event_type,
                 'resource': resource,
                 'reason': 'HTTP 403 Forbidden status detected',
-                'severity': 'MEDIUM',
+                'severity': rule_a["severity"],
                 'technical_observation': f"Event triggered HTTP 403 status: {resource}",
                 'plain_language_explanation': 'A device attempted to access a resource, but the server denied the request.',
             }
             findings.append(finding)
         
         # RULE B: POST to sensitive resources
-        sensitive_keywords = ['secret', 'admin', 'password', 'confidential', '.zip']
-        if 'POST' in event_type.upper():
+        rule_b = RULE_REGISTRY["R-B"]
+        sensitive_keywords = rule_b["detection_conditions"]["resource_keywords"]
+        if rule_b["detection_conditions"]["event_type_contains"] in event_type.upper():
             resource_lower = resource.lower()
             for keyword in sensitive_keywords:
                 if keyword in resource_lower:
                     finding = {
+                        'rule_id': rule_b["rule_id"],
                         'event_id': event_id,
                         'timestamp': timestamp,
                         'source': source_ip,
                         'event_type': event_type,
                         'resource': resource,
                         'reason': f'POST request to restricted resource containing "{keyword}"',
-                        'severity': 'HIGH',
+                        'severity': rule_b["severity"],
                         'technical_observation': f"POST request detected to resource containing sensitive keyword: {resource}",
                         'plain_language_explanation': f'A device attempted to send data to a resource containing "{keyword}" in its name.',
                     }
@@ -162,18 +168,20 @@ def detect_threats(csv_path: Path, evidence_id: int) -> list:
                     break
         
         # RULE C: Repeated POST requests from same source
-        if 'POST' in event_type.upper() and source_ip in post_requests:
+        rule_c = RULE_REGISTRY["R-C"]
+        if rule_c["detection_conditions"]["event_type_contains"] in event_type.upper() and source_ip in post_requests:
             posts = post_requests[source_ip]
-            if len(posts) >= 3:
+            if len(posts) >= rule_c["detection_conditions"]["minimum_request_count"]:
                 # Check if multiple posts occurred
                 finding = {
+                    'rule_id': rule_c["rule_id"],
                     'event_id': event_id,
                     'timestamp': timestamp,
                     'source': source_ip,
                     'event_type': event_type,
                     'resource': resource,
                     'reason': f'Multiple POST requests ({len(posts)}) from same source',
-                    'severity': 'MEDIUM',
+                    'severity': rule_c["severity"],
                     'technical_observation': f"Source {source_ip} made {len(posts)} POST requests",
                     'plain_language_explanation': f'A device sent multiple data-submission requests in a short timeframe.',
                 }
@@ -186,14 +194,16 @@ def detect_threats(csv_path: Path, evidence_id: int) -> list:
             try:
                 bytes_val = int(bytes_field)
                 if bytes_val > high_byte_threshold:
+                    rule_d = RULE_REGISTRY["R-D"]
                     finding = {
+                        'rule_id': rule_d["rule_id"],
                         'event_id': event_id,
                         'timestamp': timestamp,
                         'source': source_ip,
                         'event_type': event_type,
                         'resource': resource,
                         'reason': f'Data transfer exceeds baseline by 2+ standard deviations',
-                        'severity': 'MEDIUM',
+                        'severity': rule_d["severity"],
                         'technical_observation': f"Transfer size {bytes_val} bytes exceeds baseline {high_byte_threshold:.0f} bytes",
                         'plain_language_explanation': 'A data transfer was significantly larger than typical activity.',
                     }
@@ -208,6 +218,7 @@ def detect_threats(csv_path: Path, evidence_id: int) -> list:
 async def analyze_evidence(case_id: int):
     """Run threat detection analysis on evidence for a case."""
     connection = get_connection()
+    rules_fingerprint = calculate_rule_fingerprint()
     
     try:
         # Verify case exists
@@ -251,7 +262,11 @@ async def analyze_evidence(case_id: int):
                     case_id=case_id,
                     evidence_id=ev_code,
                     outcome="FAILURE",
-                    metadata={"status_code": exc.status_code, "error": detail},
+                    metadata={
+                        "status_code": exc.status_code,
+                        "error": detail,
+                        "rule_fingerprint": rules_fingerprint,
+                    },
                 )
                 connection.commit()
                 raise
@@ -264,7 +279,6 @@ async def analyze_evidence(case_id: int):
         )
 
         analysis_results = []
-
         # Process only integrity-verified evidence items.
         for ev_id, ev_code, working_path in verified_evidence:
             findings = detect_threats(working_path, ev_id)
@@ -287,9 +301,12 @@ async def analyze_evidence(case_id: int):
                         technical_observation,
                         plain_language_explanation,
                         status,
-                        created_at
+                        created_at,
+                        rule_id,
+                        rule_version,
+                        rule_fingerprint
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         finding_id,
@@ -305,6 +322,9 @@ async def analyze_evidence(case_id: int):
                         finding.get("plain_language_explanation"),
                         "Requires Review",
                         created_at,
+                        finding["rule_id"],
+                        RULE_REGISTRY[finding["rule_id"]]["version"],
+                        rules_fingerprint,
                     ),
                 )
 
@@ -313,6 +333,9 @@ async def analyze_evidence(case_id: int):
                     "event_id": finding.get("event_id"),
                     "severity": finding.get("severity"),
                     "reason": finding.get("reason"),
+                    "rule_id": finding["rule_id"],
+                    "rule_version": RULE_REGISTRY[finding["rule_id"]]["version"],
+                    "rule_fingerprint": rules_fingerprint,
                 })
 
         append_audit_event(
@@ -321,7 +344,10 @@ async def analyze_evidence(case_id: int):
             case_id=case_id,
             evidence_id=None,
             outcome="SUCCESS",
-            metadata={"findings_count": len(analysis_results)},
+            metadata={
+                "findings_count": len(analysis_results),
+                "rule_fingerprint": rules_fingerprint,
+            },
         )
         connection.commit()
 
@@ -341,7 +367,10 @@ async def analyze_evidence(case_id: int):
             case_id=case_id,
             evidence_id=None,
             outcome="FAILURE",
-            metadata={"error": str(exc)},
+            metadata={
+                "error": str(exc),
+                "rule_fingerprint": rules_fingerprint,
+            },
         )
         connection.commit()
         raise HTTPException(status_code=500, detail=f"Analysis failed: {exc}")
@@ -381,6 +410,9 @@ def get_case_findings(case_id: int):
             f.technical_observation,
             f.plain_language_explanation,
             f.status,
+            f.rule_id,
+            f.rule_version,
+            f.rule_fingerprint,
             e.evidence_id as evidence_code
         FROM findings f
         JOIN evidence e ON f.evidence_id = e.id
@@ -428,6 +460,9 @@ def get_finding_details(finding_id: str):
             f.technical_observation,
             f.plain_language_explanation,
             f.status,
+            f.rule_id,
+            f.rule_version,
+            f.rule_fingerprint,
             e.evidence_id as evidence_code,
             e.case_id
         FROM findings f
@@ -1366,6 +1401,7 @@ def generate_pdf_report(case_id: int) -> tuple[str, str]:
             """
             SELECT f.finding_id, f.evidence_id, f.event_id, f.timestamp, f.severity, f.reason, 
                    f.technical_observation, f.plain_language_explanation, f.status, f.source,
+                   f.rule_id, f.rule_version, f.rule_fingerprint,
                    e.evidence_id as evidence_code
             FROM findings f
             JOIN evidence e ON f.evidence_id = e.id
@@ -1702,6 +1738,9 @@ def generate_pdf_report(case_id: int) -> tuple[str, str]:
                 <b>Event ID:</b> {event_id} | 
                 <b>Timestamp:</b> {timestamp}<br/>
                 <b>Source:</b> {source} | <b>Status:</b> {status}<br/>
+                <b>Rule ID:</b> {normalize_text(finding.get('rule_id'))} |
+                <b>Rule Version:</b> {normalize_text(finding.get('rule_version'))}<br/>
+                <b>Rule Configuration SHA-256:</b> {normalize_text(finding.get('rule_fingerprint'))}<br/>
                 <b>Detection Rule/Reason:</b> {reason}<br/>
                 <b>Technical Observation:</b> {technical_observation}<br/>
                 <b>Stakeholder Explanation:</b> {plain_language_explanation}
@@ -1938,6 +1977,12 @@ def get_audit_history_endpoint(case_id: int | None = None, evidence_id: str | No
         }
     finally:
         connection.close()
+
+
+@app.get("/rules")
+def get_rules_endpoint():
+    """Return read-only metadata for the active detection rules."""
+    return get_rule_metadata()
 
 
 @app.get("/audit/verify")
