@@ -1,0 +1,30 @@
+# Canonical Events and Feature Engineering
+
+This package defines feature schema version `1.0.0`. It prepares explainable numerical inputs and retains the event metadata required to trace each result to a case, evidence item, source row, timestamp, and original evidence reference. It does not train models, assign labels, or consume detection findings.
+
+## Input and canonicalization
+
+`extract_features` accepts event mappings using the validated CSV field names (`timestamp`, `source_ip` or `source`, `event_type` or `event`, `resource` or `description`, `status`, and `bytes`). The same aliases as the existing CSV validator are recognized. Event IDs are the zero-based source-row index, so chronological sorting does not lose source-row traceability. Timestamps are converted to UTC; naive ISO timestamps are interpreted as UTC. Events are ordered by timestamp and then source-row order.
+
+Each `CanonicalEvent` retains `case_id`, `evidence_id`, `event_id`, UTC `timestamp`, `source_ip`, `event_type`, `resource`, `response_status`, `transfer_size`, and `original_evidence_reference`. The identity and source fields remain event metadata rather than model inputs.
+
+Blank source, event type, resource, response status, and transfer size values are represented explicitly as missing. Missing transfer sizes and source-dependent features remain `None`, with numerical missingness indicators provided in the feature vector. Invalid or missing timestamps, non-mapping rows, and non-negative-integer transfer-size violations raise `EventDataError` rather than silently producing features. A non-numeric response status is treated as unavailable for failure classification and indicated by `response_status_missing`.
+
+## Feature calculations
+
+The versioned definitions and meanings are published as `FEATURE_SCHEMA` and `get_feature_schema()`.
+
+- `transfer_size_bytes`: integer bytes parsed from `bytes`.
+- `request_frequency_5m`, `failed_request_frequency_5m`, and `post_request_frequency_5m`: counts for the same source in the inclusive five-minute trailing window. The current event is included. Failure means numeric status 400–599; POST means the event type contains `POST`, case-insensitively.
+- `time_since_previous_event_seconds`: elapsed UTC seconds since the prior event from the same source; null for its first event.
+- `unique_resources_accessed`: cumulative count of distinct, non-empty resource strings for the same source through the current event, after stripping and case-folding.
+- `sensitive_resource_indicator`: 1 when the resource contains `secret`, `admin`, `password`, `confidential`, or `.zip`, case-insensitively; otherwise 0.
+- Missingness indicators identify absent source, event type, resource, numeric status, transfer size, and prior same-source event.
+
+Temporal state is updated in chronological order only as each event is reached. No later event contributes to an earlier event's rolling counts, resource count, or time delta. Equal timestamps are processed in source-row order. For an absent source IP, source-dependent count and timing features are null.
+
+## Separation and traceability
+
+Each `FeatureRecord` keeps its `CanonicalEvent` separately from `features`. The `model_inputs` property returns only numerical features; case ID, evidence ID, event ID, timestamp, and original evidence reference are not model inputs. The package operates on supplied row data and does not modify or copy evidence files.
+
+Reproducibility requires retaining this package version, `FEATURE_SCHEMA_VERSION`, the original evidence reference and hash recorded by ingestion, and the extraction inputs. Feature schema changes that alter field meaning or calculation require a version change.
