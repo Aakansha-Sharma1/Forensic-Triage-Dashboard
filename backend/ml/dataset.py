@@ -3,13 +3,16 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import zipfile
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Iterable
 
-from .schema import CanonicalEvent
+from .features import engineer_features
+from .schema import FEATURE_SCHEMA_VERSION, CanonicalEvent
 
 
 AIT_LDS_SOURCE_URL = "https://zenodo.org/records/19483937"
@@ -17,9 +20,10 @@ AIT_LDS_VERSION = "v2_1"
 AIT_LDS_LICENSE = "CC-BY-NC-SA-4.0"
 DATASET_METHOD = (
     "Parse Apache access-log records in source-file line order; retain one-based "
-    "source line and SHA-256; attach only explicit line-referenced labels from "
-    "the corresponding ground-truth JSONL file; report all malformed and "
-    "unmatched rows without inferring labels."
+    "source line and SHA-256; compute versioned temporal features within each "
+    "source log; attach only explicit line-referenced labels from the "
+    "corresponding ground-truth JSONL file; report malformed and unmatched "
+    "rows without inferring labels."
 )
 
 RESEARCH_DATA_ROOT = (
@@ -31,7 +35,7 @@ RAW_DATA_DIR = RESEARCH_DATA_ROOT / "raw"
 PROCESSED_DATA_DIR = RESEARCH_DATA_ROOT / "processed"
 
 _APACHE_LINE = re.compile(
-    r'^(?P<remote_host>\S+)\s+\S+\s+\S+\s+'
+    r'^(?:(?P<virtual_host>\S+)\s+)?(?P<remote_host>\S+)\s+\S+\s+\S+\s+'
     r'\[(?P<timestamp>[^\]]+)\]\s+'
     r'(?P<request>"(?:\\.|[^"\\])*")\s+'
     r'(?P<status>\d{3}|-)\s+(?P<bytes>\d+|-)(?:\s+.*)?$'
@@ -75,6 +79,7 @@ class ApacheLogRecord:
     source_line_number: int
     scenario_id: str | None
     source_sha256: str
+    virtual_host: str | None
 
 
 @dataclass(frozen=True)
@@ -113,6 +118,8 @@ class PreparedDatasetRecord:
     source_line_number: int
     scenario_id: str | None
     source_sha256: str
+    virtual_host: str | None
+    features: dict
     ground_truth: dict | None
     ground_truth_filename: str | None
     ground_truth_reference: str | None
@@ -138,7 +145,9 @@ class PreparedDatasetRecord:
                 "source_line_number": self.source_line_number,
                 "scenario_id": self.scenario_id,
                 "source_sha256": self.source_sha256,
+                "virtual_host": self.virtual_host,
             },
+            "features": deepcopy(self.features),
             "ground_truth": deepcopy(self.ground_truth),
             "ground_truth_provenance": (
                 {
@@ -168,6 +177,106 @@ def _read_utf8_file(path: Path) -> tuple[bytes, str]:
     except UnicodeDecodeError as exc:
         raise DatasetImportError(f"{path.name}: input is not valid UTF-8.") from exc
     return content, text
+
+
+def extract_selected_archive_members(
+    archive_path: str | Path,
+    member_names: Iterable[str],
+    destination_root: str | Path,
+    *,
+    max_total_uncompressed_bytes: int | None = None,
+) -> list[Path]:
+    """Safely extract only explicitly selected regular files from a ZIP archive."""
+    selected_names = list(member_names)
+    if any(not isinstance(name, str) or not name for name in selected_names):
+        raise DatasetImportError("Selected archive member names must be non-empty strings.")
+    if len(set(selected_names)) != len(selected_names):
+        raise DatasetImportError("Selected archive member names must be unique.")
+    selected_name_set = set(selected_names)
+    for name in selected_names:
+        parts = name.split("/")
+        if any("/".join(parts[:index]) in selected_name_set for index in range(1, len(parts))):
+            raise DatasetImportError(
+                f"Selected archive members contain a file/directory collision: {name}"
+            )
+
+    root = Path(destination_root).resolve()
+    with zipfile.ZipFile(archive_path) as archive:
+        infos_by_name = {}
+        for info in archive.infolist():
+            if info.filename in infos_by_name:
+                raise DatasetImportError(
+                    f"Archive contains duplicate member names: {info.filename}"
+                )
+            infos_by_name[info.filename] = info
+
+        selected = []
+        total_size = 0
+        for name in selected_names:
+            if "\\" in name or "\x00" in name:
+                raise DatasetImportError(f"Unsafe archive member path: {name!r}")
+            parts = name.split("/")
+            path = PurePosixPath(name)
+            if (
+                path.is_absolute()
+                or re.match(r"^[A-Za-z]:", name)
+                or any(part in ("", ".", "..") for part in parts)
+            ):
+                raise DatasetImportError(f"Unsafe archive member path: {name!r}")
+            info = infos_by_name.get(name)
+            if info is None:
+                raise DatasetImportError(f"Archive member does not exist: {name}")
+            mode = (info.external_attr >> 16) & 0xFFFF
+            if info.is_dir() or (mode & 0o170000) == 0o120000:
+                raise DatasetImportError(
+                    f"Only regular archive files may be extracted: {name}"
+                )
+            target = root.joinpath(*parts).resolve()
+            if not target.is_relative_to(root):
+                raise DatasetImportError(f"Archive member escapes destination: {name}")
+            if target.exists():
+                raise FileExistsError(
+                    f"Refusing to overwrite extracted dataset file: {target}"
+                )
+            total_size += info.file_size
+            if (
+                max_total_uncompressed_bytes is not None
+                and total_size > max_total_uncompressed_bytes
+            ):
+                raise DatasetImportError(
+                    "Selected archive members exceed the configured extraction size limit."
+                )
+            selected.append((info, target))
+
+        extracted = []
+        root.mkdir(parents=True, exist_ok=True)
+        for info, target in selected:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            created = False
+            try:
+                with archive.open(info, "r") as source, target.open("xb") as output:
+                    created = True
+                    written = 0
+                    while True:
+                        chunk = source.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        written += len(chunk)
+                        if written > info.file_size:
+                            raise DatasetImportError(
+                                f"Archive member exceeded its declared size: {info.filename}"
+                            )
+                        output.write(chunk)
+                if written != info.file_size:
+                    raise DatasetImportError(
+                        f"Archive member size did not match its directory entry: {info.filename}"
+                    )
+            except Exception:
+                if created and target.exists():
+                    target.unlink()
+                raise
+            extracted.append(target)
+        return extracted
 
 
 def _parse_apache_timestamp(value: str) -> datetime:
@@ -291,6 +400,7 @@ def parse_apache_access_log(
                 source_line_number=line_number,
                 scenario_id=normalized_scenario,
                 source_sha256=source_sha256,
+                virtual_host=match.group("virtual_host"),
             )
         )
 
@@ -390,6 +500,12 @@ def prepare_apache_source(
     records_by_line = {
         record.source_line_number: record for record in apache_import.records
     }
+    feature_records = engineer_features(
+        record.event for record in apache_import.records
+    )
+    features_by_event_id = {
+        record.event.event_id: dict(record.features) for record in feature_records
+    }
     labels_by_event_line = {}
     rejected_rows = list(apache_import.rejected_rows)
     if ground_truth_import is not None:
@@ -424,6 +540,8 @@ def prepare_apache_source(
                 source_line_number=source_record.source_line_number,
                 scenario_id=source_record.scenario_id,
                 source_sha256=source_record.source_sha256,
+                virtual_host=source_record.virtual_host,
+                features=features_by_event_id[source_record.event.event_id],
                 ground_truth=deepcopy(label.payload) if label else None,
                 ground_truth_filename=(
                     ground_truth_import.label_filename if label and ground_truth_import else None
@@ -456,6 +574,7 @@ def create_dataset_manifest(
     version: str = AIT_LDS_VERSION,
     license_id: str = AIT_LDS_LICENSE,
     methodology: str = DATASET_METHOD,
+    source_archive: dict | None = None,
     processed_records_filename: str | None = None,
     processed_records_sha256: str | None = None,
 ) -> dict:
@@ -508,6 +627,7 @@ def create_dataset_manifest(
         "version": version,
         "source_url": source_url,
         "license": license_id,
+        "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "methodology": methodology,
         "source_files": file_entries,
         "record_counts": {
@@ -516,6 +636,8 @@ def create_dataset_manifest(
             "rejected_rows": rejected_count,
         },
     }
+    if source_archive is not None:
+        manifest["source_archive"] = deepcopy(source_archive)
     if processed_records_filename is not None:
         manifest["processed_output"] = {
             "filename": processed_records_filename,
@@ -535,6 +657,32 @@ def _write_if_unchanged(path: Path, content: bytes) -> None:
     path.write_bytes(content)
 
 
+def _write_manifest_if_compatible(
+    path: Path,
+    content: bytes,
+    records_filename: str,
+    records_sha256: str,
+) -> None:
+    if not path.exists():
+        path.write_bytes(content)
+        return
+    if path.read_bytes() == content:
+        return
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raise FileExistsError(f"Refusing to overwrite an unrecognized manifest: {path}")
+    existing_output = existing.get("processed_output", {})
+    if (
+        existing_output.get("filename") != records_filename
+        or existing_output.get("sha256") != records_sha256
+    ):
+        raise FileExistsError(
+            f"Refusing to overwrite a manifest for different processed data: {path}"
+        )
+    path.write_bytes(content)
+
+
 def write_processed_dataset(
     sources: Iterable[PreparedApacheSource],
     output_dir: str | Path = PROCESSED_DATA_DIR,
@@ -544,6 +692,7 @@ def write_processed_dataset(
     dataset_name: str = "AIT Log Data Set",
     version: str = AIT_LDS_VERSION,
     license_id: str = AIT_LDS_LICENSE,
+    source_archive: dict | None = None,
 ) -> dict:
     """Write deterministic JSONL and a manifest outside the raw-data directory."""
     ordered_sources = sorted(
@@ -580,6 +729,7 @@ def write_processed_dataset(
         dataset_name=dataset_name,
         version=version,
         license_id=license_id,
+        source_archive=source_archive,
         processed_records_filename=records_filename,
         processed_records_sha256=records_sha256,
     )
@@ -589,5 +739,10 @@ def write_processed_dataset(
 
     target_dir.mkdir(parents=True, exist_ok=True)
     _write_if_unchanged(target_dir / records_filename, records_content)
-    _write_if_unchanged(target_dir / "manifest.json", manifest_content)
+    _write_manifest_if_compatible(
+        target_dir / "manifest.json",
+        manifest_content,
+        records_filename,
+        records_sha256,
+    )
     return manifest

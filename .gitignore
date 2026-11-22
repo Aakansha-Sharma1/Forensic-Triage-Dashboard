@@ -27,6 +27,7 @@ uploads/working/
 # Raw and processed research datasets
 /research_datasets/ait-lds-v2.1/raw/
 /research_datasets/ait-lds-v2.1/processed/
+/russellmitchell_no-pcaps.zip
 
 # Generated reports
 reports/

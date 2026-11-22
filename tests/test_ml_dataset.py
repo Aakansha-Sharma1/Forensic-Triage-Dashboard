@@ -1,6 +1,7 @@
 import hashlib
 import json
 from pathlib import Path
+import zipfile
 
 import pytest
 
@@ -10,6 +11,7 @@ from backend.ml import (
     AIT_LDS_VERSION,
     DatasetImportError,
     create_dataset_manifest,
+    extract_selected_archive_members,
     import_ground_truth_labels,
     parse_apache_access_log,
     prepare_apache_source,
@@ -88,6 +90,26 @@ def test_apache_parser_does_not_invent_missing_source_values(tmp_path):
     assert parsed.records[0].scenario_id is None
 
 
+def test_apache_parser_supports_vhost_combined_records(tmp_path):
+    source = tmp_path / "vhost_access.txt"
+    source.write_text(
+        'cloud.example.test:443 192.0.2.20 - - '
+        '[24/Jan/2022:07:36:12 +0000] "GET / HTTP/1.1" 302 4122 "-" '
+        '"SyntheticClient/1.0"\n',
+        encoding="utf-8",
+    )
+    parsed = parse_apache_access_log(
+        source,
+        case_id=1,
+        evidence_id="synthetic-vhost",
+        scenario_id="synthetic-scenario",
+    )
+
+    assert len(parsed.records) == 1
+    assert parsed.records[0].event.source_ip == "192.0.2.20"
+    assert parsed.records[0].virtual_host == "cloud.example.test:443"
+
+
 def test_ground_truth_labels_are_attached_verbatim_without_filling_unlabeled_rows():
     parsed = parse_fixture()
     labels = import_ground_truth_labels(
@@ -105,6 +127,8 @@ def test_ground_truth_labels_are_attached_verbatim_without_filling_unlabeled_row
     assert prepared.records[1].ground_truth_filename == LABEL_FIXTURE.name
     assert prepared.records[1].ground_truth_sha256 == labels.label_sha256
     assert prepared.records[1].ground_truth_label_file_line_number == 1
+    assert prepared.records[1].features["post_request_frequency_5m"] == 1
+    assert prepared.records[1].features["failed_request_frequency_5m"] == 1
 
 
 def test_label_rejections_and_unmatched_references_are_reported(tmp_path):
@@ -148,6 +172,12 @@ def test_manifest_and_processed_output_are_reproducible_and_separate(tmp_path):
     second_manifest = create_dataset_manifest([prepared])
     processed = tmp_path / "processed"
     raw = tmp_path / "raw"
+    archive_metadata = {
+        "filename": "synthetic_archive.zip",
+        "size_bytes": 64,
+        "sha256": "a" * 64,
+        "md5": "b" * 32,
+    }
 
     written_manifest = write_processed_dataset(
         [prepared],
@@ -157,24 +187,34 @@ def test_manifest_and_processed_output_are_reproducible_and_separate(tmp_path):
     records_path = processed / "prepared_events.jsonl"
     manifest_path = processed / "manifest.json"
     first_records = records_path.read_bytes()
+    updated_manifest = write_processed_dataset(
+        [prepared],
+        output_dir=processed,
+        raw_data_dir=raw,
+        source_archive=archive_metadata,
+    )
     repeated_manifest = write_processed_dataset(
         [prepared],
         output_dir=processed,
         raw_data_dir=raw,
+        source_archive=archive_metadata,
     )
 
     assert first_manifest == second_manifest
     assert written_manifest["source_url"] == AIT_LDS_SOURCE_URL
     assert written_manifest["version"] == AIT_LDS_VERSION
     assert written_manifest["license"] == AIT_LDS_LICENSE
+    assert "source_archive" not in written_manifest
+    assert updated_manifest["source_archive"] == archive_metadata
+    assert written_manifest["feature_schema_version"] == "1.0.0"
     assert written_manifest["record_counts"] == {
         "parsed_records": 2,
         "attached_ground_truth_records": 1,
         "rejected_rows": 1,
     }
     assert written_manifest["processed_output"]["sha256"] == hashlib.sha256(first_records).hexdigest()
-    assert json.loads(manifest_path.read_text(encoding="utf-8")) == written_manifest
-    assert repeated_manifest == written_manifest
+    assert json.loads(manifest_path.read_text(encoding="utf-8")) == updated_manifest
+    assert repeated_manifest == updated_manifest
     assert records_path.read_bytes() == first_records
     saved_records = [json.loads(line) for line in first_records.decode("utf-8").splitlines()]
     assert saved_records[0]["ground_truth"] is None
@@ -202,3 +242,28 @@ def test_parser_and_label_import_reject_invalid_utf8_and_bad_metadata(tmp_path):
     )
     with pytest.raises(DatasetImportError, match="does not match"):
         prepare_apache_source(parsed, labels)
+
+
+def test_selected_zip_extraction_rejects_traversal_and_preserves_member_paths(tmp_path):
+    archive_path = tmp_path / "selective.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("gather/host/access.log", "synthetic log")
+        archive.writestr("../outside.txt", "must not escape")
+
+    destination = tmp_path / "raw"
+    with pytest.raises(DatasetImportError, match="Unsafe archive member path"):
+        extract_selected_archive_members(
+            archive_path,
+            ["gather/host/access.log", "../outside.txt"],
+            destination,
+        )
+    assert not destination.exists()
+    assert not (tmp_path / "outside.txt").exists()
+
+    extracted = extract_selected_archive_members(
+        archive_path,
+        ["gather/host/access.log"],
+        destination,
+    )
+    assert extracted == [destination / "gather" / "host" / "access.log"]
+    assert extracted[0].read_text(encoding="utf-8") == "synthetic log"
