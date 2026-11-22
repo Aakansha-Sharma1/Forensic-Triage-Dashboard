@@ -24,6 +24,10 @@ __pycache__/
 uploads/original/
 uploads/working/
 
+# Raw and processed research datasets
+/research_datasets/ait-lds-v2.1/raw/
+/research_datasets/ait-lds-v2.1/processed/
+
 # Generated reports
 reports/
 

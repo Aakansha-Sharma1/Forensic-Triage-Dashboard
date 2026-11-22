@@ -28,3 +28,19 @@ Temporal state is updated in chronological order only as each event is reached. 
 Each `FeatureRecord` keeps its `CanonicalEvent` separately from `features`. The `model_inputs` property returns only numerical features; case ID, evidence ID, event ID, timestamp, and original evidence reference are not model inputs. The package operates on supplied row data and does not modify or copy evidence files.
 
 Reproducibility requires retaining this package version, `FEATURE_SCHEMA_VERSION`, the original evidence reference and hash recorded by ingestion, and the extraction inputs. Feature schema changes that alter field meaning or calculation require a version change.
+
+## AIT Log Data Set V2.1 import
+
+The official source is [Zenodo record 19483937](https://zenodo.org/records/19483937), version `v2_1`, licensed `CC-BY-NC-SA-4.0`. The record describes eight synthetic testbed scenarios and line-referenced JSONL ground-truth files that mirror the `gather/` tree under `labels/`. Each label entry contains an original event `line`, its `labels`, and labeling `rules`. These values are retained as supplied. A source line without an explicit label remains unlabeled (`ground_truth: null`); this importer does not infer a normal label.
+
+### Download and preparation procedure
+
+1. Review the current [Zenodo record and license](https://zenodo.org/records/19483937). Select one scenario and only the corresponding `*_no-pcaps.zip` archive; do not download the full collection. No dataset archives are included in this repository or downloaded by the preparation code. Zenodo lists its `*_no-pcaps.zip` files at approximately 498 MiB to 1.23 GiB, so obtain approval before downloading one.
+2. Manually place the selected archive and extracted `gather/` and `labels/` files under `research_datasets/ait-lds-v2.1/raw/`. Keep these untouched source files separate from `research_datasets/ait-lds-v2.1/processed/`. Both locations are Git-ignored.
+3. For each chosen Apache access log, explicitly provide its scenario ID, case ID, and evidence ID to `parse_apache_access_log`. Supply the path relative to the scenario's `gather/` directory as `source_filename`; use the identical relative path under `labels/` when calling `import_ground_truth_labels`. Do not infer missing source fields or identifiers. Call `prepare_apache_source` to attach labels only by the original one-based log line number.
+4. Review the returned rejected rows and counts. Call `write_processed_dataset` with the prepared source and processed output directory. It writes deterministic JSONL plus `manifest.json`; output cannot be placed in or over the raw-data directory, and different existing processed output is not overwritten.
+5. Retain the manifest with the prepared records. It records the record URL, dataset version, license, methodology, source and label file SHA-256 values, source line/record/rejection counts, attached label counts, and processed JSONL hash. Zenodo also publishes archive checksums (MD5); the importer independently records SHA-256 of each locally supplied source file.
+
+`parse_apache_access_log` accepts common/combined Apache access-log entries with the standard remote-host, timestamp, quoted request, status, and byte-count fields. It maps the remote-host token to canonical `source_ip` without validating or inventing an IP address, uses `-` as missing only when the source explicitly contains it, converts the timestamp to UTC, and preserves filename, one-based physical line number, scenario ID, source hash, and original path. Unsupported/malformed rows are returned as `RejectedRow` entries; invalid file encoding or file access raises an explicit import error.
+
+The small files under `tests/fixtures/synthetic_ait_style/` are generated synthetic parser fixtures, not AIT data or real ground truth. They are used only by automated tests.
