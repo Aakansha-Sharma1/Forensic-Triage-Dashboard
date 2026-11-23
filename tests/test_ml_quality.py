@@ -3,8 +3,10 @@ import hashlib
 import json
 from datetime import datetime, timezone
 
+import pytest
+
 from backend.ml.features import engineer_features
-from backend.ml.quality import create_quality_report
+from backend.ml.quality import QualityAuditError, create_quality_report
 from backend.ml.schema import CanonicalEvent
 
 
@@ -314,3 +316,93 @@ def test_quality_report_flags_nonfinite_values_and_direct_target_leakage(tmp_pat
     assert report["quality_status"] == "failed"
     assert quality["target_leakage_feature_keys"] == ["research_label"]
     assert quality["violations"]["non_finite:transfer_size_bytes"] == 1
+
+
+def test_quality_report_supports_four_scenarios_and_rejects_invalid_counts(tmp_path):
+    SCENARIO_STARTS["wheeler"] = "2022-01-26"
+    try:
+        manifests = _write_all(tmp_path)
+        manifests["wheeler"] = _write_scenario(tmp_path, "wheeler")
+    finally:
+        SCENARIO_STARTS.pop("wheeler", None)
+
+    output = tmp_path / "quality_report_4.json"
+    first = create_quality_report(
+        manifests, output, similarity_manifest_path=tmp_path / "no-prior-analysis.json"
+    )
+    first_bytes = output.read_bytes()
+    second = create_quality_report(
+        manifests, output, similarity_manifest_path=tmp_path / "no-prior-analysis.json"
+    )
+
+    assert second == first
+    assert output.read_bytes() == first_bytes
+    assert first["quality_status"] == "passed_with_research_limitations"
+    assert first["reproducibility"]["input_scenario_ids"] == [
+        "harrison",
+        "russellmitchell",
+        "santos",
+        "wheeler",
+    ]
+    assert first["overall_class_distribution"] == {
+        "normal": 4,
+        "attack_associated": 4,
+        "unknown": 4,
+    }
+    assert len(first["scenario_results"]) == 4
+
+    with pytest.raises(QualityAuditError):
+        create_quality_report(
+            {
+                "russellmitchell": manifests["russellmitchell"],
+                "santos": manifests["santos"],
+            },
+            tmp_path / "too_few.json",
+        )
+    with pytest.raises(QualityAuditError):
+        create_quality_report(
+            {
+                "russellmitchell": manifests["russellmitchell"],
+                "santos": manifests["santos"],
+                "harrison": manifests["santos"],
+            },
+            tmp_path / "duplicate_path.json",
+        )
+
+
+def test_quality_report_flags_mismatched_scenario_count_in_similarity_manifest(
+    tmp_path,
+):
+    SCENARIO_STARTS["wheeler"] = "2022-01-26"
+    try:
+        manifests = _write_all(tmp_path)
+        manifests["wheeler"] = _write_scenario(tmp_path, "wheeler")
+    finally:
+        SCENARIO_STARTS.pop("wheeler", None)
+
+    prior_path = tmp_path / "prior_3_scenario_split.json"
+    prior_path.write_text(
+        json.dumps(
+            {
+                "scenario_summaries": {
+                    scenario: {
+                        "labelled_records_sha256": _sha(
+                            (manifests[scenario].parent / "labelled_events.jsonl").read_bytes()
+                        )
+                    }
+                    for scenario in SCENARIOS
+                },
+                "cross_scenario_leakage_analysis": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = create_quality_report(
+        manifests,
+        tmp_path / "quality_report_mismatch.json",
+        similarity_manifest_path=prior_path,
+    )
+
+    assert report["quality_status"] == "failed"
+    assert "cross_scenario_similarity_input_hash_mismatch" in report["quality_failures"]

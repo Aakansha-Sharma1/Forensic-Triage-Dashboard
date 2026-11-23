@@ -582,11 +582,61 @@ def _candidate_assignments(
 ) -> list[dict]:
     scenarios = tuple(sorted(scenario_summaries))
     candidates = []
-    for train, validation, test in permutations(scenarios):
+    if len(scenarios) == 3:
+        for train, validation, test in permutations(scenarios):
+            assignment = {
+                "train": train,
+                "validation": validation,
+                "test": test,
+            }
+            assignment_id = hashlib.sha256(
+                json.dumps(assignment, sort_keys=True, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+            ).hexdigest()[:16]
+            partitions = {}
+            for partition, scenario in assignment.items():
+                summary = scenario_summaries[scenario]
+                classes = summary["class_distribution"]
+                partitions[partition] = {
+                    "scenario_id": scenario,
+                    "record_count": summary["record_count"],
+                    "supervised_record_count": summary["supervised_record_count"],
+                    "class_distribution": {
+                        "normal": classes["normal"],
+                        "attack_associated": classes["attack_associated"],
+                    },
+                    "unknown_excluded_from_supervised": summary[
+                        "unknown_excluded_from_supervised"
+                    ],
+                    "attack_to_normal_ratio": summary["attack_to_normal_ratio"],
+                    "known_label_source_count": len(summary["known_label_sources"]),
+                    "labelled_records_sha256": summary["labelled_records_sha256"],
+                }
+            candidates.append(
+                {
+                    "candidate_id": assignment_id,
+                    "assignment": assignment,
+                    "partitions": partitions,
+                    "scenario_partition_isolation": len(set(assignment.values())) == 3,
+                    "all_partitions_have_both_known_classes": all(
+                        part["class_distribution"]["normal"] > 0
+                        and part["class_distribution"]["attack_associated"] > 0
+                        for part in partitions.values()
+                    ),
+                    "selection_status": "not_selected",
+                }
+            )
+        return candidates
+
+    for validation, test in permutations(scenarios, 2):
+        train_scenarios = [
+            scenario for scenario in scenarios if scenario not in (validation, test)
+        ]
         assignment = {
-            "train": train,
-            "validation": validation,
-            "test": test,
+            "train": train_scenarios,
+            "validation": [validation],
+            "test": [test],
         }
         assignment_id = hashlib.sha256(
             json.dumps(assignment, sort_keys=True, separators=(",", ":")).encode(
@@ -594,30 +644,51 @@ def _candidate_assignments(
             )
         ).hexdigest()[:16]
         partitions = {}
-        for partition, scenario in assignment.items():
-            summary = scenario_summaries[scenario]
-            classes = summary["class_distribution"]
+        for partition, group in assignment.items():
+            normal = sum(
+                scenario_summaries[s]["class_distribution"]["normal"] for s in group
+            )
+            attack = sum(
+                scenario_summaries[s]["class_distribution"]["attack_associated"]
+                for s in group
+            )
+            unknown = sum(
+                scenario_summaries[s]["unknown_excluded_from_supervised"]
+                for s in group
+            )
             partitions[partition] = {
-                "scenario_id": scenario,
-                "record_count": summary["record_count"],
-                "supervised_record_count": summary["supervised_record_count"],
+                "scenario_ids": list(group),
+                "record_count": sum(
+                    scenario_summaries[s]["record_count"] for s in group
+                ),
+                "supervised_record_count": sum(
+                    scenario_summaries[s]["supervised_record_count"] for s in group
+                ),
                 "class_distribution": {
-                    "normal": classes["normal"],
-                    "attack_associated": classes["attack_associated"],
+                    "normal": normal,
+                    "attack_associated": attack,
                 },
-                "unknown_excluded_from_supervised": summary[
-                    "unknown_excluded_from_supervised"
-                ],
-                "attack_to_normal_ratio": summary["attack_to_normal_ratio"],
-                "known_label_source_count": len(summary["known_label_sources"]),
-                "labelled_records_sha256": summary["labelled_records_sha256"],
+                "unknown_excluded_from_supervised": unknown,
+                "attack_to_normal_ratio": (
+                    round(attack / normal, 6) if normal else None
+                ),
+                "known_label_source_count": sum(
+                    len(scenario_summaries[s]["known_label_sources"]) for s in group
+                ),
+                "labelled_records_sha256_by_scenario": {
+                    s: scenario_summaries[s]["labelled_records_sha256"] for s in group
+                },
             }
+        assigned_all = [s for group in assignment.values() for s in group]
         candidates.append(
             {
                 "candidate_id": assignment_id,
                 "assignment": assignment,
                 "partitions": partitions,
-                "scenario_partition_isolation": len(set(assignment.values())) == 3,
+                "scenario_partition_isolation": (
+                    len(assigned_all) == len(set(assigned_all)) == len(scenarios)
+                    and all(len(group) >= 1 for group in assignment.values())
+                ),
                 "all_partitions_have_both_known_classes": all(
                     part["class_distribution"]["normal"] > 0
                     and part["class_distribution"]["attack_associated"] > 0
@@ -658,14 +729,18 @@ def create_split_manifest(
         if label_manifest_paths is None
         else label_manifest_paths
     )
-    if len(manifest_paths) != 3 or len(set(manifest_paths)) != 3:
+    if len(manifest_paths) < 3 or len(set(manifest_paths)) != len(manifest_paths):
         raise SplitPreparationError(
-            "Exactly three distinct scenario label manifests are required."
+            "At least three distinct scenario label manifests are required."
         )
     scenarios = tuple(sorted(manifest_paths))
     resolved_paths = {
         scenario: Path(manifest_paths[scenario]).resolve() for scenario in scenarios
     }
+    if len(set(resolved_paths.values())) != len(resolved_paths):
+        raise SplitPreparationError(
+            "Scenario label manifest paths must be distinct."
+        )
     resolved_output = Path(output_path).resolve()
     if resolved_output in set(resolved_paths.values()):
         raise SplitPreparationError("Split output must not overwrite an input manifest.")
@@ -724,13 +799,61 @@ def create_split_manifest(
         else None
     )
     candidates = _candidate_assignments(scenario_summaries)
+    three_scenarios = len(scenarios) == 3
+    single_source_scenarios = any(
+        len(summary["known_label_sources"]) <= 1
+        for summary in scenario_summaries.values()
+    )
     for candidate in candidates:
         candidate["scientifically_adequate"] = False
-        candidate["limitations"] = [
-            "Exactly one scenario is assigned to training, validation, and testing, leaving no within-partition scenario replication.",
-            "All verified binary labels in each scenario come from one intranet-server Apache source.",
-            "The merged known labels are attack-majority with a 10:1 threshold for the descriptive severe-imbalance flag.",
+        if three_scenarios:
+            candidate["limitations"] = [
+                "Exactly one scenario is assigned to training, validation, and testing, leaving no within-partition scenario replication.",
+                "All verified binary labels in each scenario come from one intranet-server Apache source.",
+                "The merged known labels are attack-majority with a 10:1 threshold for the descriptive severe-imbalance flag.",
+            ]
+        else:
+            candidate_limitations = [
+                "Validation and test partitions each contain one scenario, leaving no within-partition validation/test scenario replication.",
+                "Scientific adequacy thresholds are not automatically inferred from scenario count alone.",
+            ]
+            if single_source_scenarios:
+                candidate_limitations.append(
+                    "At least one scenario has verified binary labels from at most one source file."
+                )
+            if not candidate["all_partitions_have_both_known_classes"]:
+                candidate_limitations.append(
+                    "At least one partition lacks both known classes (normal and attack_associated)."
+                )
+            if overall_imbalance is not None and overall_imbalance >= 10:
+                candidate_limitations.append(
+                    "The merged known labels are attack-majority with a 10:1 threshold for the descriptive severe-imbalance flag."
+                )
+            candidate["limitations"] = candidate_limitations
+
+    if three_scenarios:
+        evaluation_limitations = [
+            "With exactly three scenarios, every three-way scenario-held-out assignment has only one scenario in each partition and one scenario in training.",
+            "Known-label coverage is restricted to one source file per scenario, so source and scenario effects cannot be separated.",
+            "Attack-to-normal ratios differ markedly across scenarios, including 76.1459:1 in Harrison; no candidate provides replicated scenario-level estimates.",
+            "Shared attack-category vocabularies and repeated feature vectors indicate common simulation patterns, although no exact event-content fingerprints overlap.",
         ]
+    else:
+        evaluation_limitations = [
+            f"With {len(scenarios)} scenarios, validation and test partitions still contain one scenario each; scientific adequacy is not automatically inferred from scenario count alone.",
+            "Known-label source diversity, class balance, and cross-scenario simulation similarity must be evaluated before selecting an assignment.",
+        ]
+        if single_source_scenarios:
+            evaluation_limitations.append(
+                "At least one scenario has verified binary labels restricted to at most one source file."
+            )
+        if not all(
+            candidate["all_partitions_have_both_known_classes"]
+            for candidate in candidates
+        ):
+            evaluation_limitations.append(
+                "Some candidate assignments contain a partition lacking both known classes."
+            )
 
     manifest = {
         "manifest_schema_version": SPLIT_SCHEMA_VERSION,
@@ -772,7 +895,7 @@ def create_split_manifest(
         "cross_scenario_leakage_analysis": cross_scenario,
         "candidate_evaluation": {
             "candidate_assignment_count": len(candidates),
-            "all_scenario_permutations_evaluated": True,
+            "all_scenario_permutations_evaluated": three_scenarios,
             "all_candidates_have_both_classes_per_partition": all(
                 candidate["all_partitions_have_both_known_classes"]
                 for candidate in candidates
@@ -780,17 +903,16 @@ def create_split_manifest(
             "scientifically_adequate_candidate_count": 0,
             "selected_assignment": None,
             "selection_status": "no_scientifically_adequate_three_way_assignment",
-            "limitations": [
-                "With exactly three scenarios, every three-way scenario-held-out assignment has only one scenario in each partition and one scenario in training.",
-                "Known-label coverage is restricted to one source file per scenario, so source and scenario effects cannot be separated.",
-                "Attack-to-normal ratios differ markedly across scenarios, including 76.1459:1 in Harrison; no candidate provides replicated scenario-level estimates.",
-                "Shared attack-category vocabularies and repeated feature vectors indicate common simulation patterns, although no exact event-content fingerprints overlap.",
-            ],
+            "limitations": evaluation_limitations,
         },
         "candidates": candidates,
         "preparation": {
             "assignment_is_deterministic": True,
-            "candidate_order": "lexicographic scenario ID permutations, train/validation/test",
+            "candidate_order": (
+                "lexicographic scenario ID permutations, train/validation/test"
+                if three_scenarios
+                else "lexicographic (validation, test) scenario pairs with remaining scenarios assigned to train"
+            ),
             "event_level_randomization": False,
             "random_seed": None,
             "oversampling_or_undersampling": False,

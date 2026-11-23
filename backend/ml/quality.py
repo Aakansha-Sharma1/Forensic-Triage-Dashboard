@@ -852,7 +852,7 @@ def _cross_scenario_similarity(
             "available": False,
             "reason": "Prior scenario similarity manifest has an incomplete schema.",
         }
-    verified = all(
+    verified = set(summaries) == set(scenario_hashes) and all(
         scenario in summaries
         and summaries[scenario].get("labelled_records_sha256") == expected_hash
         for scenario, expected_hash in scenario_hashes.items()
@@ -899,8 +899,14 @@ def create_quality_report(
         if label_manifest_paths is None
         else label_manifest_paths
     )
-    if len(manifest_paths) != 3 or len(set(manifest_paths)) != 3:
-        raise QualityAuditError("Exactly three distinct scenario manifests are required.")
+    if len(manifest_paths) < 3 or len(set(manifest_paths)) != len(manifest_paths):
+        raise QualityAuditError("At least three distinct scenario manifests are required.")
+    resolved_manifest_paths = {
+        scenario: Path(manifest_paths[scenario]).resolve()
+        for scenario in sorted(manifest_paths)
+    }
+    if len(set(resolved_manifest_paths.values())) != len(resolved_manifest_paths):
+        raise QualityAuditError("Scenario manifest paths must be distinct.")
     definitions, feature_names = _make_schema_definition()
     temporal_check = _temporal_prefix_check()
 
@@ -915,12 +921,12 @@ def create_quality_report(
             results = {
                 scenario: _audit_scenario(
                     scenario,
-                    Path(manifest_paths[scenario]).resolve(),
+                    resolved_manifest_paths[scenario],
                     connection,
                     definitions,
                     feature_names,
                 )
-                for scenario in sorted(manifest_paths)
+                for scenario in sorted(resolved_manifest_paths)
             }
             connection.commit()
         finally:
@@ -950,10 +956,15 @@ def create_quality_report(
         )
         for name in ("normal", "attack_associated", "unknown")
     }
+    scenario_count_limitation = (
+        "Three scenarios do not support replicated scenario-level estimates."
+        if len(results) == 3
+        else f"{len(results)} scenarios alone do not establish external validity without replicated held-out scenario evaluation."
+    )
     limitations = [
         "Class imbalance and unknown-label volume vary substantially by scenario.",
         "Verified binary labels are concentrated in one source per scenario.",
-        "Three scenarios do not support replicated scenario-level estimates.",
+        scenario_count_limitation,
         "Repeated feature patterns and shared attack-category vocabularies limit claims of cross-scenario independence.",
         "Behavioral proxy features may correlate with attack labels and require held-out evaluation.",
     ]

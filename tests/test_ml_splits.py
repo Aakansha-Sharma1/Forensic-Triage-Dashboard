@@ -1,8 +1,11 @@
 import hashlib
 import json
 
+import pytest
+
 from backend.ml.splits import (
     SPLIT_SCHEMA_VERSION,
+    SplitPreparationError,
     create_split_manifest,
 )
 
@@ -330,4 +333,170 @@ def test_unknown_records_remain_in_source_and_never_enter_supervised_counts(
         assert (
             (manifest_paths[scenario].parent / "labelled_events.jsonl").read_bytes()
             == content
+        )
+
+
+def _write_unknown_only_scenario(tmp_path, scenario):
+    directory = tmp_path / scenario
+    directory.mkdir()
+    unknown_name = "web/access.log"
+    uncovered = _source_entry(
+        scenario, unknown_name, covered=False, physical_lines=1
+    )
+    rows = [_record(scenario, unknown_name, uncovered, 1, "unknown")]
+    labelled_content = "".join(
+        json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n"
+        for row in rows
+    ).encode("utf-8")
+    labelled_path = directory / "labelled_events.jsonl"
+    labelled_path.write_bytes(labelled_content)
+
+    prepared_content = f"prepared-{scenario}\n".encode("utf-8")
+    prepared_path = directory / "prepared_events.jsonl"
+    prepared_path.write_bytes(prepared_content)
+    prepared_manifest = {
+        "manifest_schema_version": "1.0.0",
+        "dataset_name": "AIT Log Data Set V2.1",
+        "source_files": [uncovered],
+        "record_counts": {
+            "parsed_records": len(rows),
+            "attached_ground_truth_records": 0,
+            "rejected_rows": 0,
+        },
+        "processed_output": {
+            "filename": prepared_path.name,
+            "sha256": _sha256(prepared_content),
+            "record_count": len(rows),
+        },
+    }
+    prepared_manifest_content = json.dumps(
+        prepared_manifest, sort_keys=True
+    ).encode("utf-8")
+    (directory / "manifest.json").write_bytes(prepared_manifest_content)
+    label_manifest = {
+        "manifest_schema_version": "1.0.0",
+        "label_schema_version": "1.0.0",
+        "scenario_id": scenario,
+        "source_url": "https://zenodo.org/records/19483937",
+        "version": "v2_1",
+        "license": "CC-BY-NC-SA-4.0",
+        "input": {
+            "prepared_records_sha256": _sha256(prepared_content),
+            "prepared_manifest_sha256": _sha256(prepared_manifest_content),
+        },
+        "labelled_output": {
+            "filename": labelled_path.name,
+            "sha256": _sha256(labelled_content),
+        },
+        "record_counts": {
+            "input_records": len(rows),
+            "evaluation_records": len(rows),
+            "excluded_outside_simulation_period": 0,
+        },
+        "evaluation_class_distribution": {
+            "normal": 0,
+            "attack_associated": 0,
+            "unknown": 1,
+        },
+        "known_class_percentages": {"normal": 0.0, "attack_associated": 0.0},
+        "per_category_counts": {},
+        "per_source_distributions": [
+            {
+                "source_filename": unknown_name,
+                "source_sha256": uncovered["source_sha256"],
+                "ground_truth_sha256": None,
+                "ground_truth_coverage": "unavailable",
+                "evaluation_records": 1,
+                "classes": {
+                    "normal": 0,
+                    "attack_associated": 0,
+                    "unknown": 1,
+                },
+            }
+        ],
+        "source_bias_assessment": {
+            "event_bearing_source_count": 1,
+            "sources_with_verified_label_coverage": 0,
+            "sources_contributing_known_labels": 0,
+            "potential_bias": True,
+            "warning": "No verified label coverage.",
+        },
+    }
+    label_manifest_path = directory / "labels_manifest.json"
+    label_manifest_path.write_text(
+        json.dumps(label_manifest, sort_keys=True), encoding="utf-8"
+    )
+    return label_manifest_path
+
+
+def test_four_scenario_split_supports_multi_scenario_training_and_is_deterministic(
+    tmp_path,
+):
+    manifest_paths, _ = _write_all_scenarios(tmp_path)
+    wheeler_path, _ = _write_scenario(tmp_path, "wheeler")
+    manifest_paths["wheeler"] = wheeler_path
+    output_path = tmp_path / "splits" / "scenario_split_manifest.json"
+
+    first = create_split_manifest(manifest_paths, output_path)
+    first_bytes = output_path.read_bytes()
+    second = create_split_manifest(manifest_paths, output_path)
+
+    assert second == first
+    assert output_path.read_bytes() == first_bytes
+    assert first["scenario_ids"] == ["harrison", "russellmitchell", "santos", "wheeler"]
+    assert len(first["candidates"]) == 12
+    assert len(first["cross_scenario_leakage_analysis"]["pairwise"]) == 6
+    assert first["candidate_evaluation"]["selected_assignment"] is None
+    assert first["candidate_evaluation"]["scientifically_adequate_candidate_count"] == 0
+    for candidate in first["candidates"]:
+        assignment = candidate["assignment"]
+        assert len(assignment["train"]) == 2
+        assert len(assignment["validation"]) == 1
+        assert len(assignment["test"]) == 1
+        assigned = assignment["train"] + assignment["validation"] + assignment["test"]
+        assert len(set(assigned)) == 4
+        assert candidate["scenario_partition_isolation"] is True
+        assert candidate["all_partitions_have_both_known_classes"] is True
+        assert candidate["scientifically_adequate"] is False
+        assert candidate["partitions"]["train"]["supervised_record_count"] == 4
+        assert candidate["partitions"]["validation"]["supervised_record_count"] == 2
+        assert candidate["partitions"]["test"]["supervised_record_count"] == 2
+
+
+def test_four_scenario_split_flags_insufficient_labels_and_rejects_invalid_inputs(
+    tmp_path,
+):
+    manifest_paths, _ = _write_all_scenarios(tmp_path)
+    manifest_paths["wheeler"] = _write_unknown_only_scenario(tmp_path, "wheeler")
+
+    manifest = create_split_manifest(
+        manifest_paths, tmp_path / "splits" / "scenario_split_manifest.json"
+    )
+
+    assert manifest["candidate_evaluation"]["selected_assignment"] is None
+    assert (
+        manifest["candidate_evaluation"]["all_candidates_have_both_classes_per_partition"]
+        is False
+    )
+    inadequate_candidates = [
+        c for c in manifest["candidates"] if not c["all_partitions_have_both_known_classes"]
+    ]
+    assert len(inadequate_candidates) == 6
+    for candidate in inadequate_candidates:
+        assert candidate["scientifically_adequate"] is False
+        assert any("lacks both known classes" in note for note in candidate["limitations"])
+
+    with pytest.raises(SplitPreparationError):
+        create_split_manifest(
+            {"russellmitchell": manifest_paths["russellmitchell"], "santos": manifest_paths["santos"]},
+            tmp_path / "splits" / "too_few.json",
+        )
+    with pytest.raises(SplitPreparationError):
+        create_split_manifest(
+            {
+                "russellmitchell": manifest_paths["russellmitchell"],
+                "santos": manifest_paths["santos"],
+                "harrison": manifest_paths["santos"],
+            },
+            tmp_path / "splits" / "duplicate_path.json",
         )
