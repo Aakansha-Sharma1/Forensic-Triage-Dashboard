@@ -10,6 +10,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 from sklearn.compose import ColumnTransformer
+from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
@@ -864,5 +865,148 @@ def train_random_forest_baseline(
             "max_features": selected_max_feat,
             "class_weight": None,
         },
+        random_state=selected_seed,
+    )
+
+
+@dataclass(frozen=True)
+class FittedDummyBaseline:
+    """Reproducible fitted DummyClassifier reference baseline."""
+
+    pipeline: Pipeline
+    strategy: str
+    random_state: int
+    feature_names: tuple[str, ...] = EXPECTED_FEATURE_NAMES
+
+    def predict_proba(self, features: Sequence[Sequence[Any]] | np.ndarray) -> np.ndarray:
+        """Return positive-class (1 = attack_associated) probabilities."""
+        matrix = _validate_feature_matrix(features)
+        proba = self.pipeline.predict_proba(matrix)
+        classes = list(self.pipeline.named_steps["classifier"].classes_)
+        if classes == [0, 1]:
+            return np.asarray(proba[:, 1], dtype=np.float64)
+        if classes == [1]:
+            return np.ones(len(matrix), dtype=np.float64)
+        if classes == [0]:
+            return np.zeros(len(matrix), dtype=np.float64)
+        raise BaselineModelError(f"Unexpected classifier class ordering: {classes!r}")
+
+    def predict(self, features: Sequence[Sequence[Any]] | np.ndarray) -> np.ndarray:
+        """Return hard binary {0, 1} predictions from the configured DummyClassifier strategy."""
+        matrix = _validate_feature_matrix(features)
+        return np.asarray(self.pipeline.predict(matrix), dtype=np.int64)
+
+
+def load_dummy_config(
+    config_path: str | Path = DEFAULT_EXPERIMENT_CONFIG_PATH,
+) -> dict[str, Any]:
+    """Read and validate DummyClassifier settings from experiment_config.json."""
+    try:
+        config = json.loads(Path(config_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BaselineModelError(f"Unable to read experiment config: {config_path}") from exc
+    if not isinstance(config, dict):
+        raise BaselineModelError("Experiment config must be a JSON object.")
+
+    features_cfg = config.get("features", {})
+    if features_cfg.get("ordered_names") != list(EXPECTED_FEATURE_NAMES):
+        raise BaselineModelError("Experiment config feature names do not match FEATURE_SCHEMA v1.0.0.")
+
+    tree_preproc = config.get("preprocessing", {}).get("tree_models", {})
+    if tree_preproc.get("apply_log1p") is not False or tree_preproc.get("scaler") is not None:
+        raise BaselineModelError("DummyClassifier preprocessing profile must disable log1p and scaling.")
+
+    models = config.get("models")
+    if not isinstance(models, list):
+        raise BaselineModelError("Experiment config is missing models list.")
+    dummy_cfg = next(
+        (
+            item
+            for item in models
+            if isinstance(item, dict) and item.get("name") == "DummyClassifier"
+        ),
+        None,
+    )
+    if dummy_cfg is None:
+        raise BaselineModelError("DummyClassifier is not defined in experiment config.")
+    if dummy_cfg.get("uses_weighting_regimes") is not False:
+        raise BaselineModelError("DummyClassifier must have uses_weighting_regimes=false.")
+    if dummy_cfg.get("uses_threshold_tuning") is not False:
+        raise BaselineModelError("DummyClassifier must have uses_threshold_tuning=false.")
+
+    strategies = dummy_cfg.get("hyperparameter_grid", {}).get("strategy")
+    seeds = config.get("random_seeds")
+    if (
+        not isinstance(strategies, list)
+        or not strategies
+        or any(not isinstance(s, str) or not s.strip() for s in strategies)
+        or not isinstance(seeds, list)
+        or not seeds
+    ):
+        raise BaselineModelError("Incomplete DummyClassifier strategy grid or random_seeds.")
+
+    return {
+        "strategies": [str(s) for s in strategies],
+        "random_seeds": [int(s) for s in seeds],
+    }
+
+
+def build_dummy_pipeline(
+    *,
+    strategy: str = "most_frequent",
+    random_state: int = 42,
+) -> Pipeline:
+    """Construct train-only median imputation + DummyClassifier without scaling or log1p."""
+    return Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median", keep_empty_features=True)),
+            (
+                "classifier",
+                DummyClassifier(
+                    strategy=strategy,
+                    random_state=int(random_state),
+                ),
+            ),
+        ]
+    )
+
+
+def train_dummy_baseline(
+    features: Sequence[Sequence[Any]] | np.ndarray,
+    labels: Sequence[Any] | np.ndarray,
+    *,
+    strategy: str | None = None,
+    random_state: int | None = None,
+    weighting_regime: str | None = None,
+    config_path: str | Path = DEFAULT_EXPERIMENT_CONFIG_PATH,
+) -> FittedDummyBaseline:
+    """Fit a reproducible unweighted DummyClassifier reference baseline on training data."""
+    if weighting_regime is not None:
+        raise BaselineModelError(
+            "DummyClassifier does not use weighting_regimes; pass weighting_regime=None."
+        )
+    dummy_cfg = load_dummy_config(config_path)
+    selected_strategy = dummy_cfg["strategies"][0] if strategy is None else str(strategy)
+    if selected_strategy not in dummy_cfg["strategies"]:
+        raise BaselineModelError(
+            f"strategy={strategy!r} is not in configured hyperparameter_grid {dummy_cfg['strategies']!r}."
+        )
+    selected_seed = dummy_cfg["random_seeds"][0] if random_state is None else int(random_state)
+    if isinstance(random_state, bool) or selected_seed not in dummy_cfg["random_seeds"]:
+        raise BaselineModelError(
+            f"random_state={random_state!r} is not in configured random_seeds {dummy_cfg['random_seeds']!r}."
+        )
+
+    x_train = _validate_feature_matrix(features)
+    y_train = _validate_labels(labels, len(x_train), require_both_classes=False)
+
+    pipeline = build_dummy_pipeline(
+        strategy=selected_strategy,
+        random_state=selected_seed,
+    )
+    pipeline.fit(x_train, y_train)
+    return FittedDummyBaseline(
+        pipeline=pipeline,
+        strategy=selected_strategy,
         random_state=selected_seed,
     )

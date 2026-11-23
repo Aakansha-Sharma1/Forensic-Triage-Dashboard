@@ -11,6 +11,7 @@ from backend.ml.baselines import (
     compute_sample_weights,
     records_to_arrays,
     train_decision_tree_baseline,
+    train_dummy_baseline,
     train_logistic_regression_baseline,
     train_random_forest_baseline,
 )
@@ -371,3 +372,55 @@ def test_random_forest_fail_closed_validation():
         model.predict(rows, threshold=-0.1)
     with pytest.raises(BaselineModelError, match="expected 13"):
         model.predict_proba([[1, 2, 3]])
+
+
+def test_dummy_baseline_strategies_determinism_and_single_class_support():
+    rows, labels, _ = _synthetic_dataset()
+
+    # most_frequent predicts majority class (1 = attack_associated, 22 vs 12)
+    mf = train_dummy_baseline(rows, labels, strategy="most_frequent", random_state=42)
+    assert list(mf.pipeline.named_steps) == ["imputer", "classifier"]
+    mf_preds = mf.predict(rows)
+    mf_probs = mf.predict_proba(rows)
+    assert mf_preds.shape == (len(rows),)
+    assert (mf_preds == 1).all()
+    assert mf_probs.shape == (len(rows),)
+    assert (mf_probs == 1.0).all()
+
+    # stratified is deterministic across independently fitted instances with same seed
+    st1 = train_dummy_baseline(rows, labels, strategy="stratified", random_state=42)
+    st2 = train_dummy_baseline(rows, labels, strategy="stratified", random_state=42)
+    st1_preds = st1.predict(rows)
+    st2_preds = st2.predict(rows)
+    assert np.array_equal(st1_preds, st2_preds)
+    assert set(st1_preds.tolist()).issubset({0, 1})
+
+    st1_p = train_dummy_baseline(rows, labels, strategy="stratified", random_state=137).predict_proba(rows)
+    st2_p = train_dummy_baseline(rows, labels, strategy="stratified", random_state=137).predict_proba(rows)
+    assert np.array_equal(st1_p, st2_p)
+    assert ((st1_p >= 0.0) & (st1_p <= 1.0)).all()
+
+    # Single-class synthetic training subset (only normal=0 or only attack=1)
+    only_normal = train_dummy_baseline(rows[:4], [0, 0, 0, 0], strategy="most_frequent", random_state=42)
+    assert (only_normal.predict(rows[:4]) == 0).all()
+    assert (only_normal.predict_proba(rows[:4]) == 0.0).all()
+
+    only_attack = train_dummy_baseline(rows[:4], [1, 1, 1, 1], strategy="stratified", random_state=42)
+    assert (only_attack.predict(rows[:4]) == 1).all()
+    assert (only_attack.predict_proba(rows[:4]) == 1.0).all()
+
+
+def test_dummy_baseline_fail_closed_validation():
+    rows, labels, _ = _synthetic_dataset()
+    model = train_dummy_baseline(rows, labels, strategy="most_frequent", random_state=42)
+
+    with pytest.raises(BaselineModelError, match="strategy"):
+        train_dummy_baseline(rows, labels, strategy="uniform")
+    with pytest.raises(BaselineModelError, match="random_seeds"):
+        train_dummy_baseline(rows, labels, random_state=7)
+    with pytest.raises(BaselineModelError, match="weighting_regimes"):
+        train_dummy_baseline(rows, labels, weighting_regime="class_weighted")
+    with pytest.raises(BaselineModelError, match="expected 13"):
+        model.predict([[1, 2, 3]])
+    with pytest.raises(BaselineModelError, match="integer 0 or 1"):
+        train_dummy_baseline(rows[:2], [0, 2])
