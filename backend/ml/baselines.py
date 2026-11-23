@@ -10,6 +10,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
@@ -614,6 +615,253 @@ def train_decision_tree_baseline(
             "criterion": dt_cfg["criterion"],
             "max_depth": selected_depth,
             "min_samples_leaf": selected_leaf,
+            "class_weight": None,
+        },
+        random_state=selected_seed,
+    )
+
+
+@dataclass(frozen=True)
+class FittedRandomForestBaseline:
+    """Reproducible fitted Random Forest pipeline with thresholded inference."""
+
+    pipeline: Pipeline
+    weighting_regime: str
+    hyperparameters: Mapping[str, object]
+    random_state: int
+    feature_names: tuple[str, ...] = EXPECTED_FEATURE_NAMES
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "hyperparameters", MappingProxyType(dict(self.hyperparameters))
+        )
+
+    def predict_proba(self, features: Sequence[Sequence[Any]] | np.ndarray) -> np.ndarray:
+        """Return positive-class (1 = attack_associated) probabilities."""
+        matrix = _validate_feature_matrix(features)
+        proba = self.pipeline.predict_proba(matrix)
+        classes = list(self.pipeline.named_steps["classifier"].classes_)
+        if classes != [0, 1]:
+            raise BaselineModelError(f"Unexpected classifier class ordering: {classes!r}")
+        return np.asarray(proba[:, 1], dtype=np.float64)
+
+    def predict(
+        self,
+        features: Sequence[Sequence[Any]] | np.ndarray,
+        *,
+        threshold: float = FIXED_CLASSIFICATION_THRESHOLD,
+    ) -> np.ndarray:
+        """Classify events using the specified probability threshold (default 0.5)."""
+        if (
+            isinstance(threshold, bool)
+            or not isinstance(threshold, (int, float))
+            or not math.isfinite(threshold)
+            or not (0.0 <= float(threshold) <= 1.0)
+        ):
+            raise BaselineModelError(f"Invalid classification threshold: {threshold!r}")
+        probs = self.predict_proba(features)
+        return (probs >= float(threshold)).astype(np.int64)
+
+
+def load_random_forest_config(
+    config_path: str | Path = DEFAULT_EXPERIMENT_CONFIG_PATH,
+) -> dict[str, Any]:
+    """Read and validate RandomForestClassifier settings from experiment_config.json."""
+    try:
+        config = json.loads(Path(config_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BaselineModelError(f"Unable to read experiment config: {config_path}") from exc
+    if not isinstance(config, dict):
+        raise BaselineModelError("Experiment config must be a JSON object.")
+
+    features_cfg = config.get("features", {})
+    if features_cfg.get("ordered_names") != list(EXPECTED_FEATURE_NAMES):
+        raise BaselineModelError("Experiment config feature names do not match FEATURE_SCHEMA v1.0.0.")
+
+    tree_preproc = config.get("preprocessing", {}).get("tree_models", {})
+    if tree_preproc.get("apply_log1p") is not False or tree_preproc.get("scaler") is not None:
+        raise BaselineModelError("Tree preprocessing policy must disable log1p and scaling.")
+
+    weighting_policy = config.get("weighting_policy", {})
+    if (
+        weighting_policy.get("mechanism") != "sample_weight_only"
+        or weighting_policy.get("estimator_class_weight") is not None
+    ):
+        raise BaselineModelError("Experiment config must enforce sample_weight_only with class_weight=null.")
+
+    models = config.get("models")
+    if not isinstance(models, list):
+        raise BaselineModelError("Experiment config is missing models list.")
+    rf_cfg = next(
+        (
+            item
+            for item in models
+            if isinstance(item, dict) and item.get("name") == "RandomForestClassifier"
+        ),
+        None,
+    )
+    if rf_cfg is None:
+        raise BaselineModelError("RandomForestClassifier is not defined in experiment config.")
+    fixed = rf_cfg.get("fixed_parameters", {})
+    if (
+        fixed.get("class_weight") is not None
+        or fixed.get("criterion") != "gini"
+        or fixed.get("bootstrap") is not True
+    ):
+        raise BaselineModelError(
+            "RandomForestClassifier must pin class_weight=null, criterion='gini', and bootstrap=true."
+        )
+
+    grid = rf_cfg.get("hyperparameter_grid", {})
+    n_estimators = grid.get("n_estimators")
+    max_depths = grid.get("max_depth")
+    min_leaves = grid.get("min_samples_leaf")
+    max_features = grid.get("max_features")
+    seeds = config.get("random_seeds")
+    if (
+        not isinstance(n_estimators, list)
+        or not n_estimators
+        or not isinstance(max_depths, list)
+        or not max_depths
+        or not isinstance(min_leaves, list)
+        or not min_leaves
+        or not isinstance(max_features, list)
+        or not max_features
+        or not isinstance(seeds, list)
+        or not seeds
+    ):
+        raise BaselineModelError("Incomplete RandomForestClassifier hyperparameter grid or random_seeds.")
+
+    return {
+        "criterion": "gini",
+        "bootstrap": True,
+        "n_estimators_values": [int(v) for v in n_estimators],
+        "max_depth_values": [int(v) for v in max_depths],
+        "min_samples_leaf_values": [int(v) for v in min_leaves],
+        "max_features_values": [str(v) for v in max_features],
+        "random_seeds": [int(s) for s in seeds],
+        "weighting_regimes": tuple(
+            r["name"] for r in weighting_policy.get("regimes", []) if isinstance(r, dict)
+        ),
+    }
+
+
+def build_random_forest_pipeline(
+    *,
+    n_estimators: int = 100,
+    max_depth: int = 5,
+    min_samples_leaf: int = 10,
+    max_features: str = "sqrt",
+    criterion: str = "gini",
+    bootstrap: bool = True,
+    random_state: int = 42,
+) -> Pipeline:
+    """Construct train-only median imputation + RandomForestClassifier without scaling or log1p."""
+    return Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median", keep_empty_features=True)),
+            (
+                "classifier",
+                RandomForestClassifier(
+                    n_estimators=int(n_estimators),
+                    criterion=criterion,
+                    max_depth=int(max_depth),
+                    min_samples_leaf=int(min_samples_leaf),
+                    max_features=max_features,
+                    bootstrap=bool(bootstrap),
+                    class_weight=None,
+                    random_state=int(random_state),
+                ),
+            ),
+        ]
+    )
+
+
+def train_random_forest_baseline(
+    features: Sequence[Sequence[Any]] | np.ndarray,
+    labels: Sequence[Any] | np.ndarray,
+    *,
+    weighting_regime: str = "class_weighted",
+    scenario_ids: Sequence[str] | None = None,
+    n_estimators: int | None = None,
+    max_depth: int | None = None,
+    min_samples_leaf: int | None = None,
+    max_features: str | None = None,
+    random_state: int | None = None,
+    config_path: str | Path = DEFAULT_EXPERIMENT_CONFIG_PATH,
+) -> FittedRandomForestBaseline:
+    """Fit a reproducible RandomForestClassifier baseline strictly on training data."""
+    rf_cfg = load_random_forest_config(config_path)
+    if weighting_regime not in rf_cfg["weighting_regimes"]:
+        raise BaselineModelError(
+            f"weighting_regime {weighting_regime!r} is not configured in experiment_config.json."
+        )
+
+    selected_n_est = (
+        rf_cfg["n_estimators_values"][0] if n_estimators is None else int(n_estimators)
+    )
+    if isinstance(n_estimators, bool) or selected_n_est not in rf_cfg["n_estimators_values"]:
+        raise BaselineModelError(
+            f"n_estimators={n_estimators!r} is not in configured hyperparameter_grid {rf_cfg['n_estimators_values']!r}."
+        )
+    selected_depth = rf_cfg["max_depth_values"][0] if max_depth is None else int(max_depth)
+    if isinstance(max_depth, bool) or selected_depth not in rf_cfg["max_depth_values"]:
+        raise BaselineModelError(
+            f"max_depth={max_depth!r} is not in configured hyperparameter_grid {rf_cfg['max_depth_values']!r}."
+        )
+    selected_leaf = (
+        rf_cfg["min_samples_leaf_values"][0]
+        if min_samples_leaf is None
+        else int(min_samples_leaf)
+    )
+    if isinstance(min_samples_leaf, bool) or selected_leaf not in rf_cfg["min_samples_leaf_values"]:
+        raise BaselineModelError(
+            f"min_samples_leaf={min_samples_leaf!r} is not in configured hyperparameter_grid {rf_cfg['min_samples_leaf_values']!r}."
+        )
+    selected_max_feat = (
+        rf_cfg["max_features_values"][0] if max_features is None else str(max_features)
+    )
+    if selected_max_feat not in rf_cfg["max_features_values"]:
+        raise BaselineModelError(
+            f"max_features={max_features!r} is not in configured hyperparameter_grid {rf_cfg['max_features_values']!r}."
+        )
+    selected_seed = rf_cfg["random_seeds"][0] if random_state is None else int(random_state)
+    if isinstance(random_state, bool) or selected_seed not in rf_cfg["random_seeds"]:
+        raise BaselineModelError(
+            f"random_state={random_state!r} is not in configured random_seeds {rf_cfg['random_seeds']!r}."
+        )
+
+    x_train = _validate_feature_matrix(features)
+    y_train = _validate_labels(labels, len(x_train), require_both_classes=True)
+    sample_weight = compute_sample_weights(
+        y_train,
+        weighting_regime,
+        scenario_ids=scenario_ids,
+    )
+
+    pipeline = build_random_forest_pipeline(
+        n_estimators=selected_n_est,
+        max_depth=selected_depth,
+        min_samples_leaf=selected_leaf,
+        max_features=selected_max_feat,
+        criterion=rf_cfg["criterion"],
+        bootstrap=rf_cfg["bootstrap"],
+        random_state=selected_seed,
+    )
+    if pipeline.named_steps["classifier"].class_weight is not None:
+        raise BaselineModelError("Estimator class_weight must remain None to prevent double-weighting.")
+
+    pipeline.fit(x_train, y_train, classifier__sample_weight=sample_weight)
+    return FittedRandomForestBaseline(
+        pipeline=pipeline,
+        weighting_regime=weighting_regime,
+        hyperparameters={
+            "n_estimators": selected_n_est,
+            "criterion": rf_cfg["criterion"],
+            "bootstrap": rf_cfg["bootstrap"],
+            "max_depth": selected_depth,
+            "min_samples_leaf": selected_leaf,
+            "max_features": selected_max_feat,
             "class_weight": None,
         },
         random_state=selected_seed,
