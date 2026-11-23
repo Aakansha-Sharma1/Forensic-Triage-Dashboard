@@ -9,11 +9,14 @@ from backend.ml.experiment_runner import (
     ExperimentRunnerError,
     InnerValidationObservation,
     build_nested_loso_plan,
+    execute_inner_candidate_validation,
+    execute_outer_fold_inner_validation,
     run_nested_loso_plan,
     select_inner_configurations_by_regime,
     select_inner_validation_configuration,
 )
 from backend.ml.schema import FEATURE_SCHEMA
+from backend.ml.training_data import SupervisedRecord
 
 
 SCENARIOS = ("fox", "harrison", "russellmitchell", "santos")
@@ -442,3 +445,201 @@ def test_inner_selection_fails_closed_on_incomplete_duplicate_leakage_and_invali
     bad_cand[0] = InnerValidationObservation(**{**bad_cand[0].__dict__, "candidate_id": "deadbeef"})
     with pytest.raises(ExperimentRunnerError, match="unexpected candidate_id"):
         select_inner_validation_configuration(plan, fold, lr_spec, "class_weighted", bad_cand)
+
+
+def _make_synthetic_supervised_records(scenario: str) -> list[SupervisedRecord]:
+    records: list[SupervisedRecord] = []
+    for i in range(10):
+        records.append(
+            SupervisedRecord(
+                scenario_id=scenario,
+                event_id=f"intranet/access.log:{i + 1}",
+                source_filename="intranet/access.log",
+                source_line_number=i + 1,
+                source_sha256="a" * 64,
+                original_evidence_reference=f"raw/{scenario}/gather/intranet/access.log",
+                label=0,
+                label_name="normal",
+                label_basis="absence_from_verified_ground_truth_file",
+                label_provenance={"policy_id": "ait-lds-v2.1-explicit-ground-truth-v1"},
+                attack_categories=(),
+                features=(
+                    200 + i * 10,
+                    1 + (i % 2),
+                    0,
+                    0,
+                    None if i == 0 else 50.0 + i,
+                    1 + (i % 3),
+                    0,
+                    0, 0, 0, 0, 0,
+                    1 if i == 0 else 0,
+                ),
+            )
+        )
+    for i in range(10):
+        records.append(
+            SupervisedRecord(
+                scenario_id=scenario,
+                event_id=f"intranet/access.log:{11 + i}",
+                source_filename="intranet/access.log",
+                source_line_number=11 + i,
+                source_sha256="a" * 64,
+                original_evidence_reference=f"raw/{scenario}/gather/intranet/access.log",
+                label=1,
+                label_name="attack_associated",
+                label_basis="explicit_ground_truth",
+                label_provenance={"policy_id": "ait-lds-v2.1-explicit-ground-truth-v1"},
+                attack_categories=("foothold",),
+                features=(
+                    7000 + i * 200,
+                    50 + i * 3,
+                    30 + i * 2,
+                    12 + (i % 4),
+                    0.5 + (i % 3) * 0.2,
+                    40 + i,
+                    1,
+                    0, 0, 0, 0, 0, 0,
+                ),
+            )
+        )
+    return records
+
+
+def _full_baseline_compatible_mutator(cfg):
+    cfg["features"]["log1p_transform_features"] = [
+        "transfer_size_bytes",
+        "request_frequency_5m",
+        "failed_request_frequency_5m",
+        "post_request_frequency_5m",
+        "time_since_previous_event_seconds",
+        "unique_resources_accessed",
+    ]
+    cfg["features"]["binary_indicator_features"] = [
+        "sensitive_resource_indicator",
+        "source_ip_missing",
+        "event_type_missing",
+        "resource_missing",
+        "response_status_missing",
+        "transfer_size_missing",
+        "time_since_previous_event_missing",
+    ]
+    cfg["preprocessing"] = {
+        "tree_models": {"apply_log1p": False, "scaler": None, "fit_on": "train_only"}
+    }
+    lr = next(m for m in cfg["models"] if m["name"] == "LogisticRegression")
+    lr["hyperparameter_grid"] = {
+        "C": [0.1, 1.0],
+        "penalty": ["l2"],
+        "solver": ["lbfgs"],
+        "max_iter": [1000],
+    }
+    cfg["models"].append(
+        {
+            "name": "RandomForestClassifier",
+            "family": "ensemble_tree",
+            "probabilistic": True,
+            "preprocessing_profile": "tree_models",
+            "uses_weighting_regimes": True,
+            "uses_threshold_tuning": True,
+            "stochastic": True,
+            "fixed_parameters": {
+                "class_weight": None,
+                "criterion": "gini",
+                "bootstrap": True,
+            },
+            "hyperparameter_grid": {
+                "n_estimators": [10],
+                "max_depth": [5],
+                "min_samples_leaf": [5],
+                "max_features": ["sqrt"],
+            },
+        }
+    )
+
+
+def test_inner_fold_executor_runs_all_models_deterministically_and_feeds_selector(tmp_path):
+    cfg_path = _build_synthetic_plan_fixture(
+        tmp_path, mutate_config=_full_baseline_compatible_mutator
+    )
+    plan = build_nested_loso_plan(cfg_path, base_dir=tmp_path)
+    fold = plan.outer_folds[0]  # outer_test_fox
+    records_by_scenario = {
+        scenario: _make_synthetic_supervised_records(scenario)
+        for scenario in fold.outer_train_scenarios
+    }
+
+    for model_name in ("LogisticRegression", "DecisionTreeClassifier", "RandomForestClassifier"):
+        spec = next(s for s in plan.model_specs if s.name == model_name)
+        obs_1 = execute_outer_fold_inner_validation(
+            plan,
+            fold,
+            spec,
+            "scenario_equalized_class_weighted",
+            records_by_scenario,
+            config_path=cfg_path,
+        )
+        obs_2 = execute_outer_fold_inner_validation(
+            plan,
+            fold,
+            spec,
+            "scenario_equalized_class_weighted",
+            records_by_scenario,
+            config_path=cfg_path,
+        )
+        assert obs_1 == obs_2
+        selection = select_inner_validation_configuration(
+            plan, fold, spec, "scenario_equalized_class_weighted", obs_1
+        )
+        assert selection.excluded_outer_test_scenarios == ("fox",)
+        assert selection.mean_validation_macro_f1 >= 0.9
+
+
+def test_inner_fold_executor_rejects_outer_test_leakage_duplicates_and_missing_scenarios(tmp_path):
+    cfg_path = _build_synthetic_plan_fixture(
+        tmp_path, mutate_config=_full_baseline_compatible_mutator
+    )
+    plan = build_nested_loso_plan(cfg_path, base_dir=tmp_path)
+    fold = plan.outer_folds[0]
+    cand = fold.inner_candidates[0]
+    lr_spec = next(s for s in plan.model_specs if s.name == "LogisticRegression")
+
+    records_by_scenario = {
+        scenario: _make_synthetic_supervised_records(scenario)
+        for scenario in fold.outer_train_scenarios
+    }
+    fox_records = _make_synthetic_supervised_records("fox")
+
+    # 1. Outer test passed to execute_outer_fold_inner_validation
+    with pytest.raises(ExperimentRunnerError, match="Outer test scenario"):
+        execute_outer_fold_inner_validation(
+            plan,
+            fold,
+            lr_spec,
+            "class_weighted",
+            {**records_by_scenario, "fox": fox_records},
+            config_path=cfg_path,
+        )
+
+    train_recs = (
+        records_by_scenario[cand.train_scenarios[0]]
+        + records_by_scenario[cand.train_scenarios[1]]
+    )
+    val_recs = records_by_scenario[cand.validation_scenarios[0]]
+
+    # 2. Outer test record injected into train_records
+    with pytest.raises(ExperimentRunnerError, match="forbidden scenario"):
+        execute_inner_candidate_validation(
+            plan, fold, cand, lr_spec, "class_weighted", [*train_recs, fox_records[0]], val_recs, config_path=cfg_path
+        )
+
+    # 3. Duplicate record identity in train_records
+    with pytest.raises(ExperimentRunnerError, match="duplicate record identity"):
+        execute_inner_candidate_validation(
+            plan, fold, cand, lr_spec, "class_weighted", [*train_recs, train_recs[0]], val_recs, config_path=cfg_path
+        )
+
+    # 4. Missing one of the candidate's training scenarios
+    with pytest.raises(ExperimentRunnerError, match="missing expected scenarios"):
+        execute_inner_candidate_validation(
+            plan, fold, cand, lr_spec, "class_weighted", records_by_scenario[cand.train_scenarios[0]], val_recs, config_path=cfg_path
+        )

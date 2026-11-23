@@ -8,10 +8,21 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol, Sequence
 
+import numpy as np
+
+from .baselines import (
+    BaselineModelError,
+    records_to_arrays,
+    train_decision_tree_baseline,
+    train_logistic_regression_baseline,
+    train_random_forest_baseline,
+)
+from .evaluation import EvaluationError, evaluate_hard_predictions
 from .schema import FEATURE_SCHEMA_VERSION
 from .training_data import (
     DEFAULT_EXPERIMENT_CONFIG_PATH,
     PROJECT_ROOT,
+    SupervisedRecord,
     TrainingDataError,
     load_and_verify_experiment_config,
 )
@@ -877,3 +888,252 @@ def select_inner_configurations_by_regime(
         )
         for regime in expected_regimes
     }
+
+
+_TUNABLE_MODEL_NAMES: frozenset[str] = frozenset(
+    ("LogisticRegression", "DecisionTreeClassifier", "RandomForestClassifier")
+)
+
+
+def _validate_partition_records(
+    records: Sequence[SupervisedRecord],
+    *,
+    expected_scenarios: tuple[str, ...],
+    forbidden_scenarios: frozenset[str],
+    partition_name: str,
+) -> set[tuple[str, str, str]]:
+    if not records:
+        raise ExperimentRunnerError(f"{partition_name} records must be non-empty.")
+    expected_set = set(expected_scenarios)
+    seen_scenarios: set[str] = set()
+    identities: set[tuple[str, str, str]] = set()
+    for idx, record in enumerate(records):
+        if not isinstance(record, SupervisedRecord):
+            raise ExperimentRunnerError(
+                f"{partition_name}[{idx}] must be a SupervisedRecord."
+            )
+        if record.scenario_id in forbidden_scenarios:
+            raise ExperimentRunnerError(
+                f"{partition_name}[{idx}] contains forbidden scenario {record.scenario_id!r}."
+            )
+        if record.scenario_id not in expected_set:
+            raise ExperimentRunnerError(
+                f"{partition_name}[{idx}] scenario {record.scenario_id!r} not in expected {expected_scenarios!r}."
+            )
+        if type(record.label) is not int or record.label not in (0, 1):
+            raise ExperimentRunnerError(
+                f"{partition_name}[{idx}] has invalid supervised label {record.label!r}."
+            )
+        if not record.label_provenance:
+            raise ExperimentRunnerError(
+                f"{partition_name}[{idx}] is missing label_provenance."
+            )
+        identity = (record.scenario_id, record.source_filename, record.event_id)
+        if identity in identities:
+            raise ExperimentRunnerError(
+                f"{partition_name} contains duplicate record identity {identity!r}."
+            )
+        identities.add(identity)
+        seen_scenarios.add(record.scenario_id)
+
+    missing_scenarios = sorted(expected_set - seen_scenarios)
+    if missing_scenarios:
+        raise ExperimentRunnerError(
+            f"{partition_name} is missing expected scenarios: {missing_scenarios!r}."
+        )
+    return identities
+
+
+def _fit_configured_model(
+    model_name: str,
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    *,
+    weighting_regime: str,
+    train_scenarios: tuple[str, ...],
+    params: Mapping[str, object],
+    seed: int,
+    config_path: str | Path,
+):
+    if model_name == "LogisticRegression":
+        return train_logistic_regression_baseline(
+            x_train,
+            y_train,
+            weighting_regime=weighting_regime,
+            scenario_ids=train_scenarios,
+            C=float(params["C"]),
+            random_state=seed,
+            config_path=config_path,
+        )
+    if model_name == "DecisionTreeClassifier":
+        return train_decision_tree_baseline(
+            x_train,
+            y_train,
+            weighting_regime=weighting_regime,
+            scenario_ids=train_scenarios,
+            max_depth=int(params["max_depth"]),
+            min_samples_leaf=int(params["min_samples_leaf"]),
+            random_state=seed,
+            config_path=config_path,
+        )
+    if model_name == "RandomForestClassifier":
+        return train_random_forest_baseline(
+            x_train,
+            y_train,
+            weighting_regime=weighting_regime,
+            scenario_ids=train_scenarios,
+            n_estimators=int(params["n_estimators"]),
+            max_depth=int(params["max_depth"]),
+            min_samples_leaf=int(params["min_samples_leaf"]),
+            max_features=str(params["max_features"]),
+            random_state=seed,
+            config_path=config_path,
+        )
+    raise ExperimentRunnerError(f"Unsupported tunable model for inner execution: {model_name!r}")
+
+
+def execute_inner_candidate_validation(
+    plan: NestedLOSOPlan,
+    fold: OuterFoldPlan,
+    candidate: InnerCandidatePlan,
+    model_spec: ModelGridSpec,
+    weighting_regime: str,
+    train_records: Sequence[SupervisedRecord],
+    validation_records: Sequence[SupervisedRecord],
+    *,
+    config_path: str | Path = DEFAULT_EXPERIMENT_CONFIG_PATH,
+) -> tuple[InnerValidationObservation, ...]:
+    """Fit on inner training scenarios only and evaluate all grids/thresholds on inner validation."""
+    if fold not in plan.outer_folds:
+        raise ExperimentRunnerError(f"Fold {fold.fold_id!r} is not part of the validated plan.")
+    if candidate not in fold.inner_candidates:
+        raise ExperimentRunnerError(
+            f"Candidate {candidate.candidate_id!r} is not part of fold {fold.fold_id!r}."
+        )
+    if model_spec not in plan.model_specs:
+        raise ExperimentRunnerError(f"Model {model_spec.name!r} is not part of the validated plan.")
+    if model_spec.name not in _TUNABLE_MODEL_NAMES:
+        raise ExperimentRunnerError(
+            f"Model {model_spec.name!r} is not supported by inner candidate validation executor."
+        )
+    if weighting_regime not in model_spec.weighting_regimes:
+        raise ExperimentRunnerError(
+            f"Weighting regime {weighting_regime!r} is not configured for {model_spec.name!r}."
+        )
+
+    outer_test_set = frozenset(fold.test_scenarios)
+    train_ids = _validate_partition_records(
+        train_records,
+        expected_scenarios=candidate.train_scenarios,
+        forbidden_scenarios=outer_test_set | frozenset(candidate.validation_scenarios),
+        partition_name="train_records",
+    )
+    val_ids = _validate_partition_records(
+        validation_records,
+        expected_scenarios=candidate.validation_scenarios,
+        forbidden_scenarios=outer_test_set | frozenset(candidate.train_scenarios),
+        partition_name="validation_records",
+    )
+    if not train_ids.isdisjoint(val_ids):
+        raise ExperimentRunnerError("Record identity overlap detected between train and validation.")
+
+    try:
+        x_train, y_train, train_scenarios = records_to_arrays(train_records)
+        x_val, y_val, _ = records_to_arrays(validation_records)
+    except BaselineModelError as exc:
+        raise ExperimentRunnerError(str(exc)) from exc
+
+    if set(y_val.tolist()) != {0, 1}:
+        raise ExperimentRunnerError(
+            f"Validation scenario {candidate.validation_scenarios[0]!r} must contain both classes (0 and 1)."
+        )
+
+    validation_scenario = candidate.validation_scenarios[0]
+    observations: list[InnerValidationObservation] = []
+
+    for seed in plan.random_seeds:
+        for params in model_spec.parameter_combinations:
+            try:
+                fitted = _fit_configured_model(
+                    model_spec.name,
+                    x_train,
+                    y_train,
+                    weighting_regime=weighting_regime,
+                    train_scenarios=train_scenarios,
+                    params=params,
+                    seed=seed,
+                    config_path=config_path,
+                )
+                val_probs = fitted.predict_proba(x_val)
+            except BaselineModelError as exc:
+                raise ExperimentRunnerError(str(exc)) from exc
+
+            for threshold in plan.candidate_thresholds:
+                val_preds = (val_probs >= threshold).astype(np.int64)
+                try:
+                    metrics = evaluate_hard_predictions(y_val, val_preds)
+                except EvaluationError as exc:
+                    raise ExperimentRunnerError(str(exc)) from exc
+                macro_f1 = metrics["macro_f1"]
+                if macro_f1 is None:
+                    raise ExperimentRunnerError(
+                        f"Undefined validation Macro-F1 for {model_spec.name}/{candidate.candidate_id}."
+                    )
+                observations.append(
+                    InnerValidationObservation(
+                        fold_id=fold.fold_id,
+                        candidate_id=candidate.candidate_id,
+                        validation_scenario=validation_scenario,
+                        model_name=model_spec.name,
+                        weighting_regime=weighting_regime,
+                        seed=seed,
+                        hyperparameters=params,
+                        threshold=threshold,
+                        macro_f1=float(macro_f1),
+                        partition_role="validation",
+                    )
+                )
+
+    return tuple(observations)
+
+
+def execute_outer_fold_inner_validation(
+    plan: NestedLOSOPlan,
+    fold: OuterFoldPlan,
+    model_spec: ModelGridSpec,
+    weighting_regime: str,
+    records_by_scenario: Mapping[str, Sequence[SupervisedRecord]],
+    *,
+    config_path: str | Path = DEFAULT_EXPERIMENT_CONFIG_PATH,
+) -> tuple[InnerValidationObservation, ...]:
+    """Execute all 3 inner candidates for one outer fold while strictly excluding outer test data."""
+    if fold not in plan.outer_folds:
+        raise ExperimentRunnerError(f"Fold {fold.fold_id!r} is not part of the validated plan.")
+    if any(test_s in records_by_scenario for test_s in fold.test_scenarios):
+        raise ExperimentRunnerError(
+            f"Outer test scenario {fold.test_scenarios!r} must not be passed to inner validation."
+        )
+    if set(records_by_scenario) != set(fold.outer_train_scenarios):
+        raise ExperimentRunnerError(
+            f"records_by_scenario keys {sorted(records_by_scenario)!r} must match outer_train_scenarios {list(fold.outer_train_scenarios)!r}."
+        )
+
+    all_obs: list[InnerValidationObservation] = []
+    for candidate in fold.inner_candidates:
+        train_recs: list[SupervisedRecord] = []
+        for scenario in candidate.train_scenarios:
+            train_recs.extend(records_by_scenario[scenario])
+        val_recs = list(records_by_scenario[candidate.validation_scenarios[0]])
+        all_obs.extend(
+            execute_inner_candidate_validation(
+                plan,
+                fold,
+                candidate,
+                model_spec,
+                weighting_regime,
+                train_recs,
+                val_recs,
+                config_path=config_path,
+            )
+        )
+    return tuple(all_obs)
