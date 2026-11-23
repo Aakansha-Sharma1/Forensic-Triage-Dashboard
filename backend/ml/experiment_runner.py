@@ -619,3 +619,261 @@ def run_nested_loso_plan(
         "models_evaluated": [spec.name for spec in selected_specs],
         "results": model_results,
     }
+
+
+@dataclass(frozen=True)
+class InnerValidationObservation:
+    """One precomputed inner-validation Macro-F1 observation for a joint configuration."""
+
+    fold_id: str
+    candidate_id: str
+    validation_scenario: str
+    model_name: str
+    weighting_regime: str
+    seed: int
+    hyperparameters: Mapping[str, object]
+    threshold: float
+    macro_f1: float | None
+    partition_role: str = "validation"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "hyperparameters", MappingProxyType(dict(self.hyperparameters))
+        )
+
+
+@dataclass(frozen=True)
+class InnerSelectionResult:
+    """Deterministic inner-validation selection result for one (fold, model, weighting_regime)."""
+
+    experiment_id: str
+    split_manifest_sha256: str
+    quality_report_sha256: str
+    fold_id: str
+    excluded_outer_test_scenarios: tuple[str, ...]
+    inner_candidate_ids: tuple[str, ...]
+    model_name: str
+    weighting_regime: str
+    seeds_used: tuple[int, ...]
+    selected_hyperparameters: Mapping[str, object]
+    selected_threshold: float
+    mean_validation_macro_f1: float
+    std_validation_macro_f1: float
+    evaluated_joint_configurations: int
+    observations_count: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "selected_hyperparameters",
+            MappingProxyType(dict(self.selected_hyperparameters)),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "experiment_id": self.experiment_id,
+            "split_manifest_sha256": self.split_manifest_sha256,
+            "quality_report_sha256": self.quality_report_sha256,
+            "fold_id": self.fold_id,
+            "excluded_outer_test_scenarios": list(self.excluded_outer_test_scenarios),
+            "inner_candidate_ids": list(self.inner_candidate_ids),
+            "model_name": self.model_name,
+            "weighting_regime": self.weighting_regime,
+            "seeds_used": list(self.seeds_used),
+            "selected_hyperparameters": dict(self.selected_hyperparameters),
+            "selected_threshold": self.selected_threshold,
+            "mean_validation_macro_f1": self.mean_validation_macro_f1,
+            "std_validation_macro_f1": self.std_validation_macro_f1,
+            "evaluated_joint_configurations": self.evaluated_joint_configurations,
+            "observations_count": self.observations_count,
+        }
+
+
+def _canonical_param_key(params: Mapping[str, object]) -> str:
+    return json.dumps(dict(params), sort_keys=True, separators=(",", ":"))
+
+
+def select_inner_validation_configuration(
+    plan: NestedLOSOPlan,
+    fold: OuterFoldPlan,
+    model_spec: ModelGridSpec,
+    weighting_regime: str,
+    observations: Sequence[InnerValidationObservation],
+) -> InnerSelectionResult:
+    """Select the best joint (hyperparameters, threshold) strictly from inner validation."""
+    if fold not in plan.outer_folds:
+        raise ExperimentRunnerError(f"Fold {fold.fold_id!r} is not part of the validated plan.")
+    if model_spec not in plan.model_specs:
+        raise ExperimentRunnerError(f"Model {model_spec.name!r} is not part of the validated plan.")
+    if not (model_spec.probabilistic and model_spec.uses_threshold_tuning and model_spec.uses_weighting_regimes):
+        raise ExperimentRunnerError(
+            f"Model {model_spec.name!r} does not use weighted joint hyperparameter/threshold selection."
+        )
+    if weighting_regime not in model_spec.weighting_regimes:
+        raise ExperimentRunnerError(
+            f"Weighting regime {weighting_regime!r} is not configured for {model_spec.name!r}."
+        )
+    if not observations:
+        raise ExperimentRunnerError("Inner validation observations must be non-empty.")
+
+    expected_candidates = {
+        ic.candidate_id: ic.validation_scenarios[0] for ic in fold.inner_candidates
+    }
+    outer_test_set = set(fold.test_scenarios)
+    expected_seeds = plan.random_seeds
+    expected_seed_set = set(expected_seeds)
+    expected_thresholds = plan.candidate_thresholds
+    expected_threshold_set = set(expected_thresholds)
+
+    param_index_by_key: dict[str, int] = {}
+    params_by_index: list[Mapping[str, object]] = []
+    for idx, combo in enumerate(model_spec.parameter_combinations):
+        key = _canonical_param_key(combo)
+        if key in param_index_by_key:
+            raise ExperimentRunnerError(f"Duplicate hyperparameter combination in {model_spec.name!r}.")
+        param_index_by_key[key] = idx
+        params_by_index.append(combo)
+
+    seen_keys: set[tuple[str, int, int, float]] = set()
+    scores_by_joint: dict[tuple[int, float], dict[tuple[str, int], float]] = {
+        (param_idx, threshold): {}
+        for param_idx in range(len(params_by_index))
+        for threshold in expected_thresholds
+    }
+
+    for idx, obs in enumerate(observations):
+        if not isinstance(obs, InnerValidationObservation):
+            raise ExperimentRunnerError(f"Observation {idx} must be an InnerValidationObservation.")
+        if obs.partition_role != "validation":
+            raise ExperimentRunnerError(
+                f"Observation {idx}: partition_role={obs.partition_role!r} is prohibited in inner selection."
+            )
+        if obs.fold_id != fold.fold_id:
+            raise ExperimentRunnerError(
+                f"Observation {idx}: fold_id={obs.fold_id!r} does not match {fold.fold_id!r}."
+            )
+        if obs.model_name != model_spec.name:
+            raise ExperimentRunnerError(
+                f"Observation {idx}: model_name={obs.model_name!r} does not match {model_spec.name!r}."
+            )
+        if obs.weighting_regime != weighting_regime:
+            raise ExperimentRunnerError(
+                f"Observation {idx}: mixed weighting regime {obs.weighting_regime!r} != {weighting_regime!r}."
+            )
+        if obs.validation_scenario in outer_test_set:
+            raise ExperimentRunnerError(
+                f"Observation {idx}: outer test scenario {obs.validation_scenario!r} leaked into inner selection."
+            )
+        if obs.candidate_id not in expected_candidates:
+            raise ExperimentRunnerError(
+                f"Observation {idx}: unexpected candidate_id {obs.candidate_id!r} for fold {fold.fold_id!r}."
+            )
+        if obs.validation_scenario != expected_candidates[obs.candidate_id]:
+            raise ExperimentRunnerError(
+                f"Observation {idx}: validation_scenario {obs.validation_scenario!r} does not match candidate {obs.candidate_id!r}."
+            )
+        if isinstance(obs.seed, bool) or obs.seed not in expected_seed_set:
+            raise ExperimentRunnerError(f"Observation {idx}: unconfigured seed {obs.seed!r}.")
+        if (
+            isinstance(obs.threshold, bool)
+            or not isinstance(obs.threshold, (int, float))
+            or not math.isfinite(float(obs.threshold))
+            or float(obs.threshold) not in expected_threshold_set
+        ):
+            raise ExperimentRunnerError(f"Observation {idx}: invalid threshold {obs.threshold!r}.")
+        threshold_val = float(obs.threshold)
+
+        param_key = _canonical_param_key(obs.hyperparameters)
+        if param_key not in param_index_by_key:
+            raise ExperimentRunnerError(
+                f"Observation {idx}: unconfigured hyperparameters {dict(obs.hyperparameters)!r}."
+            )
+        param_idx = param_index_by_key[param_key]
+
+        if (
+            obs.macro_f1 is None
+            or isinstance(obs.macro_f1, bool)
+            or not isinstance(obs.macro_f1, (int, float))
+            or not math.isfinite(float(obs.macro_f1))
+            or not (0.0 <= float(obs.macro_f1) <= 1.0)
+        ):
+            raise ExperimentRunnerError(
+                f"Observation {idx}: undefined or invalid Macro-F1 score {obs.macro_f1!r}."
+            )
+
+        unique_key = (obs.candidate_id, obs.seed, param_idx, threshold_val)
+        if unique_key in seen_keys:
+            raise ExperimentRunnerError(f"Duplicate inner validation observation: {unique_key!r}")
+        seen_keys.add(unique_key)
+        scores_by_joint[(param_idx, threshold_val)][(obs.candidate_id, obs.seed)] = float(
+            obs.macro_f1
+        )
+
+    expected_per_joint = len(expected_candidates) * len(expected_seeds)
+    expected_total = len(params_by_index) * len(expected_thresholds) * expected_per_joint
+    if len(seen_keys) != expected_total:
+        raise ExperimentRunnerError(
+            f"Incomplete inner validation observations: got {len(seen_keys)}, expected {expected_total}."
+        )
+
+    ordered_candidate_ids = tuple(ic.candidate_id for ic in fold.inner_candidates)
+    ranked: list[tuple[tuple[float, float, float, int], int, float, float, float]] = []
+    for param_idx in range(len(params_by_index)):
+        for threshold_val in expected_thresholds:
+            cell_map = scores_by_joint[(param_idx, threshold_val)]
+            ordered_scores = [
+                cell_map[(cid, seed)]
+                for cid in ordered_candidate_ids
+                for seed in expected_seeds
+            ]
+            mean_f1 = sum(ordered_scores) / len(ordered_scores)
+            variance = sum((score - mean_f1) ** 2 for score in ordered_scores) / len(ordered_scores)
+            std_f1 = math.sqrt(variance)
+            rank_key = (
+                -round(mean_f1, 12),
+                round(abs(threshold_val - 0.5), 12),
+                threshold_val,
+                param_idx,
+            )
+            ranked.append((rank_key, param_idx, threshold_val, mean_f1, std_f1))
+
+    ranked.sort(key=lambda item: item[0])
+    _, best_param_idx, best_threshold, best_mean, best_std = ranked[0]
+
+    return InnerSelectionResult(
+        experiment_id=plan.experiment_id,
+        split_manifest_sha256=plan.split_manifest_sha256,
+        quality_report_sha256=plan.quality_report_sha256,
+        fold_id=fold.fold_id,
+        excluded_outer_test_scenarios=fold.test_scenarios,
+        inner_candidate_ids=ordered_candidate_ids,
+        model_name=model_spec.name,
+        weighting_regime=weighting_regime,
+        seeds_used=expected_seeds,
+        selected_hyperparameters=params_by_index[best_param_idx],
+        selected_threshold=best_threshold,
+        mean_validation_macro_f1=best_mean,
+        std_validation_macro_f1=best_std,
+        evaluated_joint_configurations=len(ranked),
+        observations_count=len(seen_keys),
+    )
+
+
+def select_inner_configurations_by_regime(
+    plan: NestedLOSOPlan,
+    fold: OuterFoldPlan,
+    model_spec: ModelGridSpec,
+    observations_by_regime: Mapping[str, Sequence[InnerValidationObservation]],
+) -> dict[str, InnerSelectionResult]:
+    """Select best joint inner configuration separately for each configured weighting regime."""
+    expected_regimes = model_spec.weighting_regimes
+    if set(observations_by_regime) != set(expected_regimes):
+        raise ExperimentRunnerError(
+            f"observations_by_regime keys {sorted(observations_by_regime)!r} must match {list(expected_regimes)!r}."
+        )
+    return {
+        regime: select_inner_validation_configuration(
+            plan, fold, model_spec, regime, observations_by_regime[regime]
+        )
+        for regime in expected_regimes
+    }

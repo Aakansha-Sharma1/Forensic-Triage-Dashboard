@@ -7,8 +7,11 @@ import pytest
 
 from backend.ml.experiment_runner import (
     ExperimentRunnerError,
+    InnerValidationObservation,
     build_nested_loso_plan,
     run_nested_loso_plan,
+    select_inner_configurations_by_regime,
+    select_inner_validation_configuration,
 )
 from backend.ml.schema import FEATURE_SCHEMA
 
@@ -276,3 +279,166 @@ def test_nested_loso_plan_rejects_leakage_duplicate_candidates_and_bad_provenanc
     cfg_dw = _build_synthetic_plan_fixture(tmp_path / "dw", mutate_config=_double_weight)
     with pytest.raises(ExperimentRunnerError, match="class_weight=null"):
         build_nested_loso_plan(cfg_dw, base_dir=tmp_path / "dw")
+
+
+def _make_inner_observations(plan, fold, model_spec, regime, score_fn):
+    observations = []
+    for ic in fold.inner_candidates:
+        for seed in plan.random_seeds:
+            for params in model_spec.parameter_combinations:
+                for threshold in plan.candidate_thresholds:
+                    observations.append(
+                        InnerValidationObservation(
+                            fold_id=fold.fold_id,
+                            candidate_id=ic.candidate_id,
+                            validation_scenario=ic.validation_scenarios[0],
+                            model_name=model_spec.name,
+                            weighting_regime=regime,
+                            seed=seed,
+                            hyperparameters=params,
+                            threshold=threshold,
+                            macro_f1=score_fn(params, threshold, ic.candidate_id, seed),
+                        )
+                    )
+    return observations
+
+
+def test_inner_selection_picks_best_macro_f1_and_applies_deterministic_tie_breaking(tmp_path):
+    def _five_seeds_and_thresholds(cfg):
+        cfg["random_seeds"] = [42, 137, 256, 512, 1024]
+        cfg["evaluation_protocol"]["threshold_selection"]["candidate_thresholds"] = [
+            0.3, 0.4, 0.5, 0.6, 0.7
+        ]
+
+    cfg_path = _build_synthetic_plan_fixture(tmp_path, mutate_config=_five_seeds_and_thresholds)
+    plan = build_nested_loso_plan(cfg_path, base_dir=tmp_path)
+    fold = plan.outer_folds[0]
+    lr_spec = next(s for s in plan.model_specs if s.name == "LogisticRegression")
+
+    # 1. Clear winner: C=1.0, threshold=0.6
+    obs_cw = _make_inner_observations(
+        plan,
+        fold,
+        lr_spec,
+        "class_weighted",
+        lambda p, t, _c, _s: 0.85 if (p["C"] == 1.0 and t == 0.6) else 0.70,
+    )
+    # 2. Separate regime with exact tie across 0.4 and 0.6 (same distance 0.1 from 0.5)
+    #    and across C=0.1 (grid idx 0) and C=1.0 (grid idx 1) -> must pick threshold 0.4, C=0.1
+    obs_eq = _make_inner_observations(
+        plan,
+        fold,
+        lr_spec,
+        "scenario_equalized_class_weighted",
+        lambda p, t, _c, _s: 0.80 if t in (0.4, 0.6) else 0.60,
+    )
+
+    by_regime = select_inner_configurations_by_regime(
+        plan,
+        fold,
+        lr_spec,
+        {
+            "class_weighted": obs_cw,
+            "scenario_equalized_class_weighted": obs_eq,
+        },
+    )
+
+    cw_res = by_regime["class_weighted"]
+    assert dict(cw_res.selected_hyperparameters) == {"C": 1.0, "solver": "lbfgs"}
+    assert cw_res.selected_threshold == 0.6
+    assert abs(cw_res.mean_validation_macro_f1 - 0.85) < 1e-12
+    assert cw_res.seeds_used == (42, 137, 256, 512, 1024)
+    assert cw_res.excluded_outer_test_scenarios == ("fox",)
+    assert cw_res.observations_count == 3 * 5 * 2 * 5
+
+    eq_res = by_regime["scenario_equalized_class_weighted"]
+    assert eq_res.selected_threshold == 0.4
+    assert dict(eq_res.selected_hyperparameters) == {"C": 0.1, "solver": "lbfgs"}
+    assert abs(eq_res.mean_validation_macro_f1 - 0.80) < 1e-12
+    # JSON-serializable and deterministic
+    assert json.dumps(eq_res.to_dict(), sort_keys=True) == json.dumps(
+        select_inner_validation_configuration(
+            plan, fold, lr_spec, "scenario_equalized_class_weighted", list(reversed(obs_eq))
+        ).to_dict(),
+        sort_keys=True,
+    )
+
+    # 3. Tie including 0.5 must prefer 0.5 over 0.4 and 0.6
+    obs_prefer_half = _make_inner_observations(
+        plan,
+        fold,
+        lr_spec,
+        "class_weighted",
+        lambda p, t, _c, _s: 0.90 if t in (0.4, 0.5, 0.6) else 0.50,
+    )
+    half_res = select_inner_validation_configuration(
+        plan, fold, lr_spec, "class_weighted", obs_prefer_half
+    )
+    assert half_res.selected_threshold == 0.5
+    assert dict(half_res.selected_hyperparameters) == {"C": 0.1, "solver": "lbfgs"}
+
+
+def test_inner_selection_fails_closed_on_incomplete_duplicate_leakage_and_invalid_inputs(tmp_path):
+    cfg_path = _build_synthetic_plan_fixture(tmp_path)
+    plan = build_nested_loso_plan(cfg_path, base_dir=tmp_path)
+    fold = plan.outer_folds[0]
+    lr_spec = next(s for s in plan.model_specs if s.name == "LogisticRegression")
+    base_obs = _make_inner_observations(
+        plan, fold, lr_spec, "class_weighted", lambda _p, _t, _c, _s: 0.75
+    )
+
+    # Incomplete observations
+    with pytest.raises(ExperimentRunnerError, match="Incomplete"):
+        select_inner_validation_configuration(plan, fold, lr_spec, "class_weighted", base_obs[:-1])
+
+    # Duplicate entry
+    with pytest.raises(ExperimentRunnerError, match="Duplicate"):
+        select_inner_validation_configuration(
+            plan, fold, lr_spec, "class_weighted", [*base_obs, base_obs[0]]
+        )
+
+    # Outer test scenario leakage
+    leaked = list(base_obs)
+    leaked[0] = InnerValidationObservation(
+        **{**leaked[0].__dict__, "validation_scenario": fold.test_scenarios[0]}
+    )
+    with pytest.raises(ExperimentRunnerError, match="outer test scenario"):
+        select_inner_validation_configuration(plan, fold, lr_spec, "class_weighted", leaked)
+
+    # Non-validation partition_role
+    test_role = list(base_obs)
+    test_role[0] = InnerValidationObservation(
+        **{**test_role[0].__dict__, "partition_role": "test"}
+    )
+    with pytest.raises(ExperimentRunnerError, match="partition_role"):
+        select_inner_validation_configuration(plan, fold, lr_spec, "class_weighted", test_role)
+
+    # Mixed weighting regimes
+    mixed_weight = list(base_obs)
+    mixed_weight[0] = InnerValidationObservation(
+        **{**mixed_weight[0].__dict__, "weighting_regime": "scenario_equalized_class_weighted"}
+    )
+    with pytest.raises(ExperimentRunnerError, match="mixed weighting regime"):
+        select_inner_validation_configuration(plan, fold, lr_spec, "class_weighted", mixed_weight)
+
+    # Undefined Macro-F1 (None)
+    undef_f1 = list(base_obs)
+    undef_f1[0] = InnerValidationObservation(**{**undef_f1[0].__dict__, "macro_f1": None})
+    with pytest.raises(ExperimentRunnerError, match="undefined or invalid Macro-F1"):
+        select_inner_validation_configuration(plan, fold, lr_spec, "class_weighted", undef_f1)
+
+    # Unconfigured seed / invalid threshold / unexpected candidate_id
+    bad_seed = list(base_obs)
+    bad_seed[0] = InnerValidationObservation(**{**bad_seed[0].__dict__, "seed": 999})
+    with pytest.raises(ExperimentRunnerError, match="unconfigured seed"):
+        select_inner_validation_configuration(plan, fold, lr_spec, "class_weighted", bad_seed)
+
+    bad_thresh = list(base_obs)
+    bad_thresh[0] = InnerValidationObservation(**{**bad_thresh[0].__dict__, "threshold": 0.25})
+    with pytest.raises(ExperimentRunnerError, match="invalid threshold"):
+        select_inner_validation_configuration(plan, fold, lr_spec, "class_weighted", bad_thresh)
+
+    bad_cand = list(base_obs)
+    bad_cand[0] = InnerValidationObservation(**{**bad_cand[0].__dict__, "candidate_id": "deadbeef"})
+    with pytest.raises(ExperimentRunnerError, match="unexpected candidate_id"):
+        select_inner_validation_configuration(plan, fold, lr_spec, "class_weighted", bad_cand)
