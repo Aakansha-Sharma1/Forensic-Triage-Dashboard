@@ -56,3 +56,19 @@ The original multi-label `ground_truth` payload and `ground_truth_provenance` ar
 For each scenario, only sources with a verified corresponding ground-truth file can contribute normal labels; absent files leave events unknown. The source concentration is recorded as a dataset-bias warning and must be considered when designing later evaluation. This step prepares labels only; it does not train models, balance classes, assign data splits, or use detection-rule findings.
 
 The official Zenodo scenario table and each archive's selectively retained `dataset.yaml` agree on these windows: Russell Mitchell, 2022-01-21 to 2022-01-25; Santos, 2022-01-14 to 2022-01-18; Harrison, 2022-02-04 to 2022-02-09. The metadata boundaries are timezone-naive; the archived Apache timestamps use UTC (`+0000`), so preparation interprets the windows as UTC. In the current Russell Mitchell, Santos, and Harrison Apache imports, each scenario has one corresponding intranet-server access-log label file; other source files remain unknown absent their own verified label coverage.
+
+## Scenario-held-out split assessment
+
+`backend.ml.splits.create_split_manifest` verifies each labelled dataset against its prepared dataset and manifests, checks label/source provenance and counts, and streams records into temporary SQLite tables to compare identities and event/feature fingerprints without copying or modifying the datasets. It evaluates all six train/validation/test permutations of Russell Mitchell, Santos, and Harrison. Unknown-labelled events remain in the labelled datasets and are reported as excluded from supervised record counts. This step only assesses candidates; it does not train or evaluate a model, preprocess features, or assign a usable split.
+
+The split-analysis manifest is written to the Git-ignored `research_datasets/ait-lds-v2.1/splits/scenario_split_manifest.json`. It includes input hashes, scenario assignments and per-partition counts for every candidate. Since each of the three scenarios supplies only one partition in any permutation, none is selected: there is only one training scenario and no replicated scenario-level estimates. Verified binary labels in each scenario come from one intranet-server source, preventing separation of scenario and source effects. A transformation used in later experiments must be fitted on the known-labelled training partition only and then applied unchanged to validation and test.
+
+The verified labelled manifests contain **7,958 normal**, **430,865 attack-associated**, and **467,983 unknown** events (906,806 total). These are the counts in the source manifests; they differ from a previously stated baseline of 8,958 normal and 466,983 unknown, so the verified manifests take precedence. Scenario known-label distributions are:
+
+| Scenario | Normal | Attack-associated | Unknown | Attack:normal |
+| --- | ---: | ---: | ---: | ---: |
+| Russell Mitchell | 835 | 7,695 | 94,807 | 9.2156:1 |
+| Santos | 1,668 | 7,794 | 200,659 | 4.6727:1 |
+| Harrison | 5,455 | 415,376 | 172,517 | 76.1459:1 |
+
+No within-scenario duplicate `(scenario_id, event_id)` identities or exact event-content fingerprints were found. Pairwise event-ID string collisions were 22,334 (Russell Mitchell–Santos), 30,329 (Russell Mitchell–Harrison), and 28,933 (Santos–Harrison). The IDs omit scenario ID, so these are namespace collisions, not proof of duplicate events. Pairwise shared feature-vector fingerprints were 4,511, 3,130, and 4,881 respectively; attack-category vocabularies were identical across scenarios. These indicate repeated simulation patterns, a potential generalization limitation even though exact event-content overlap is zero. The pronounced class imbalance, especially Harrison's 76.1459:1 ratio, and the small number of scenarios mean none of the six candidates is scientifically adequate for confirmatory model evaluation. No resampling or split selection is justified by this assessment.

@@ -27,6 +27,7 @@ uploads/working/
 # Raw and processed research datasets
 /research_datasets/ait-lds-v2.1/raw/
 /research_datasets/ait-lds-v2.1/processed/
+/research_datasets/ait-lds-v2.1/splits/
 /russellmitchell_no-pcaps.zip
 /santos_no-pcaps.zip
 /harrison_no-pcaps.zip

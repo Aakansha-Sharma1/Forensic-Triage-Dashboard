@@ -36,11 +36,20 @@ from .schema import (
     canonicalize_events,
     get_feature_schema,
 )
+from .splits import (
+    DEFAULT_LABEL_MANIFEST_PATHS,
+    SCENARIO_IDS,
+    SPLIT_OUTPUT_PATH,
+    SPLIT_SCHEMA_VERSION,
+    SplitPreparationError,
+    create_split_manifest,
+)
 
 __all__ = [
     "FEATURE_SCHEMA",
     "FEATURE_SCHEMA_VERSION",
     "CanonicalEvent",
+    "DEFAULT_LABEL_MANIFEST_PATHS",
     "AIT_LDS_LICENSE",
     "AIT_LDS_SOURCE_URL",
     "AIT_LDS_VERSION",
@@ -60,8 +69,13 @@ __all__ = [
     "RejectedRow",
     "RUSSELLMITCHELL_SIMULATION_END",
     "RUSSELLMITCHELL_SIMULATION_START",
+    "SCENARIO_IDS",
+    "SPLIT_OUTPUT_PATH",
+    "SPLIT_SCHEMA_VERSION",
+    "SplitPreparationError",
     "canonicalize_events",
     "create_dataset_manifest",
+    "create_split_manifest",
     "extract_selected_archive_members",
     "engineer_features",
     "extract_features",
