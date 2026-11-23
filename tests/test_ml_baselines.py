@@ -10,6 +10,7 @@ from backend.ml.baselines import (
     LOG1P_FEATURE_NAMES,
     compute_sample_weights,
     records_to_arrays,
+    train_decision_tree_baseline,
     train_logistic_regression_baseline,
 )
 from backend.ml.training_data import EXPECTED_FEATURE_NAMES, SupervisedRecord
@@ -217,3 +218,79 @@ def test_records_to_arrays_and_fail_closed_validation():
         train_logistic_regression_baseline(rows, labels, C=99.0)
     with pytest.raises(BaselineModelError, match="random_seeds"):
         train_logistic_regression_baseline(rows, labels, random_state=7)
+
+
+def test_decision_tree_training_weighting_imputation_and_reproducibility():
+    rows, labels, scenarios = _synthetic_dataset()
+
+    first = train_decision_tree_baseline(
+        rows,
+        labels,
+        weighting_regime="scenario_equalized_class_weighted",
+        scenario_ids=scenarios,
+        max_depth=3,
+        min_samples_leaf=10,
+        random_state=42,
+    )
+    second = train_decision_tree_baseline(
+        rows,
+        labels,
+        weighting_regime="scenario_equalized_class_weighted",
+        scenario_ids=scenarios,
+        max_depth=3,
+        min_samples_leaf=10,
+        random_state=42,
+    )
+
+    clf = first.pipeline.named_steps["classifier"]
+    assert clf.class_weight is None
+    assert clf.criterion == "gini"
+    assert clf.max_depth == 3
+    assert clf.min_samples_leaf == 10
+    assert list(first.pipeline.named_steps) == ["imputer", "classifier"]
+
+    # Imputer preserves unscaled values and fills missing time delta with training median
+    imputed = first.pipeline.named_steps["imputer"].transform(
+        np.asarray([[math.nan if v is None else float(v) for v in r] for r in rows])
+    )
+    assert imputed.shape == (len(rows), len(EXPECTED_FEATURE_NAMES))
+    assert math.isclose(imputed[0, 0], float(rows[0][0]))
+    assert np.isfinite(imputed).all()
+
+    p1 = first.predict_proba(rows)
+    p2 = second.predict_proba(rows)
+    y1 = first.predict(rows, threshold=FIXED_CLASSIFICATION_THRESHOLD)
+    y2 = second.predict(rows, threshold=FIXED_CLASSIFICATION_THRESHOLD)
+    assert np.array_equal(p1, p2)
+    assert np.array_equal(y1, y2)
+    assert ((p1 >= 0.0) & (p1 <= 1.0)).all()
+    assert set(y1.tolist()).issubset({0, 1})
+    assert (y1 == np.asarray(labels)).mean() >= 0.9
+
+    # Also verify class_weighted regime and explicit custom threshold
+    cw = train_decision_tree_baseline(
+        rows, labels, weighting_regime="class_weighted", max_depth=5, random_state=137
+    )
+    assert cw.predict(rows, threshold=0.8).shape == (len(rows),)
+
+
+def test_decision_tree_fail_closed_validation():
+    rows, labels, scenarios = _synthetic_dataset()
+    model = train_decision_tree_baseline(rows, labels, max_depth=3, min_samples_leaf=10)
+
+    with pytest.raises(BaselineModelError, match="max_depth"):
+        train_decision_tree_baseline(rows, labels, max_depth=99)
+    with pytest.raises(BaselineModelError, match="min_samples_leaf"):
+        train_decision_tree_baseline(rows, labels, min_samples_leaf=3)
+    with pytest.raises(BaselineModelError, match="random_seeds"):
+        train_decision_tree_baseline(rows, labels, random_state=7)
+    with pytest.raises(BaselineModelError, match="weighting_regime"):
+        train_decision_tree_baseline(rows, labels, weighting_regime="unweighted")
+    with pytest.raises(BaselineModelError, match="scenario_ids"):
+        train_decision_tree_baseline(
+            rows, labels, weighting_regime="scenario_equalized_class_weighted"
+        )
+    with pytest.raises(BaselineModelError, match="Invalid classification threshold"):
+        model.predict(rows, threshold=1.2)
+    with pytest.raises(BaselineModelError, match="expected 13"):
+        model.predict_proba([[1, 2, 3]])

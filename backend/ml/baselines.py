@@ -14,6 +14,7 @@ from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, StandardScaler
+from sklearn.tree import DecisionTreeClassifier
 
 from .training_data import (
     DEFAULT_EXPERIMENT_CONFIG_PATH,
@@ -407,6 +408,212 @@ def train_logistic_regression_baseline(
             "penalty": lr_cfg["penalty"],
             "solver": lr_cfg["solver"],
             "max_iter": lr_cfg["max_iter"],
+            "class_weight": None,
+        },
+        random_state=selected_seed,
+    )
+
+
+@dataclass(frozen=True)
+class FittedDecisionTreeBaseline:
+    """Reproducible fitted Decision Tree pipeline with thresholded inference."""
+
+    pipeline: Pipeline
+    weighting_regime: str
+    hyperparameters: Mapping[str, object]
+    random_state: int
+    feature_names: tuple[str, ...] = EXPECTED_FEATURE_NAMES
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "hyperparameters", MappingProxyType(dict(self.hyperparameters))
+        )
+
+    def predict_proba(self, features: Sequence[Sequence[Any]] | np.ndarray) -> np.ndarray:
+        """Return positive-class (1 = attack_associated) probabilities."""
+        matrix = _validate_feature_matrix(features)
+        proba = self.pipeline.predict_proba(matrix)
+        classes = list(self.pipeline.named_steps["classifier"].classes_)
+        if classes != [0, 1]:
+            raise BaselineModelError(f"Unexpected classifier class ordering: {classes!r}")
+        return np.asarray(proba[:, 1], dtype=np.float64)
+
+    def predict(
+        self,
+        features: Sequence[Sequence[Any]] | np.ndarray,
+        *,
+        threshold: float = FIXED_CLASSIFICATION_THRESHOLD,
+    ) -> np.ndarray:
+        """Classify events using the specified probability threshold (default 0.5)."""
+        if (
+            isinstance(threshold, bool)
+            or not isinstance(threshold, (int, float))
+            or not math.isfinite(threshold)
+            or not (0.0 <= float(threshold) <= 1.0)
+        ):
+            raise BaselineModelError(f"Invalid classification threshold: {threshold!r}")
+        probs = self.predict_proba(features)
+        return (probs >= float(threshold)).astype(np.int64)
+
+
+def load_decision_tree_config(
+    config_path: str | Path = DEFAULT_EXPERIMENT_CONFIG_PATH,
+) -> dict[str, Any]:
+    """Read and validate DecisionTreeClassifier settings from experiment_config.json."""
+    try:
+        config = json.loads(Path(config_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BaselineModelError(f"Unable to read experiment config: {config_path}") from exc
+    if not isinstance(config, dict):
+        raise BaselineModelError("Experiment config must be a JSON object.")
+
+    features_cfg = config.get("features", {})
+    if features_cfg.get("ordered_names") != list(EXPECTED_FEATURE_NAMES):
+        raise BaselineModelError("Experiment config feature names do not match FEATURE_SCHEMA v1.0.0.")
+
+    tree_preproc = config.get("preprocessing", {}).get("tree_models", {})
+    if tree_preproc.get("apply_log1p") is not False or tree_preproc.get("scaler") is not None:
+        raise BaselineModelError("Tree preprocessing policy must disable log1p and scaling.")
+
+    weighting_policy = config.get("weighting_policy", {})
+    if (
+        weighting_policy.get("mechanism") != "sample_weight_only"
+        or weighting_policy.get("estimator_class_weight") is not None
+    ):
+        raise BaselineModelError("Experiment config must enforce sample_weight_only with class_weight=null.")
+
+    models = config.get("models")
+    if not isinstance(models, list):
+        raise BaselineModelError("Experiment config is missing models list.")
+    dt_cfg = next(
+        (
+            item
+            for item in models
+            if isinstance(item, dict) and item.get("name") == "DecisionTreeClassifier"
+        ),
+        None,
+    )
+    if dt_cfg is None:
+        raise BaselineModelError("DecisionTreeClassifier is not defined in experiment config.")
+    fixed = dt_cfg.get("fixed_parameters", {})
+    if fixed.get("class_weight") is not None or fixed.get("criterion") != "gini":
+        raise BaselineModelError(
+            "DecisionTreeClassifier must pin class_weight=null and criterion='gini'."
+        )
+
+    grid = dt_cfg.get("hyperparameter_grid", {})
+    max_depths = grid.get("max_depth")
+    min_leaves = grid.get("min_samples_leaf")
+    seeds = config.get("random_seeds")
+    if (
+        not isinstance(max_depths, list)
+        or not max_depths
+        or not isinstance(min_leaves, list)
+        or not min_leaves
+        or not isinstance(seeds, list)
+        or not seeds
+    ):
+        raise BaselineModelError("Incomplete DecisionTreeClassifier hyperparameter grid or random_seeds.")
+
+    return {
+        "criterion": "gini",
+        "max_depth_values": [int(v) for v in max_depths],
+        "min_samples_leaf_values": [int(v) for v in min_leaves],
+        "random_seeds": [int(s) for s in seeds],
+        "weighting_regimes": tuple(
+            r["name"] for r in weighting_policy.get("regimes", []) if isinstance(r, dict)
+        ),
+    }
+
+
+def build_decision_tree_pipeline(
+    *,
+    max_depth: int = 3,
+    min_samples_leaf: int = 10,
+    criterion: str = "gini",
+    random_state: int = 42,
+) -> Pipeline:
+    """Construct train-only median imputation + DecisionTreeClassifier without scaling or log1p."""
+    return Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median", keep_empty_features=True)),
+            (
+                "classifier",
+                DecisionTreeClassifier(
+                    criterion=criterion,
+                    max_depth=int(max_depth),
+                    min_samples_leaf=int(min_samples_leaf),
+                    class_weight=None,
+                    random_state=int(random_state),
+                ),
+            ),
+        ]
+    )
+
+
+def train_decision_tree_baseline(
+    features: Sequence[Sequence[Any]] | np.ndarray,
+    labels: Sequence[Any] | np.ndarray,
+    *,
+    weighting_regime: str = "class_weighted",
+    scenario_ids: Sequence[str] | None = None,
+    max_depth: int | None = None,
+    min_samples_leaf: int | None = None,
+    random_state: int | None = None,
+    config_path: str | Path = DEFAULT_EXPERIMENT_CONFIG_PATH,
+) -> FittedDecisionTreeBaseline:
+    """Fit a reproducible DecisionTreeClassifier baseline strictly on training data."""
+    dt_cfg = load_decision_tree_config(config_path)
+    if weighting_regime not in dt_cfg["weighting_regimes"]:
+        raise BaselineModelError(
+            f"weighting_regime {weighting_regime!r} is not configured in experiment_config.json."
+        )
+
+    selected_depth = dt_cfg["max_depth_values"][0] if max_depth is None else int(max_depth)
+    if isinstance(max_depth, bool) or selected_depth not in dt_cfg["max_depth_values"]:
+        raise BaselineModelError(
+            f"max_depth={max_depth!r} is not in configured hyperparameter_grid {dt_cfg['max_depth_values']!r}."
+        )
+    selected_leaf = (
+        dt_cfg["min_samples_leaf_values"][0]
+        if min_samples_leaf is None
+        else int(min_samples_leaf)
+    )
+    if isinstance(min_samples_leaf, bool) or selected_leaf not in dt_cfg["min_samples_leaf_values"]:
+        raise BaselineModelError(
+            f"min_samples_leaf={min_samples_leaf!r} is not in configured hyperparameter_grid {dt_cfg['min_samples_leaf_values']!r}."
+        )
+    selected_seed = dt_cfg["random_seeds"][0] if random_state is None else int(random_state)
+    if isinstance(random_state, bool) or selected_seed not in dt_cfg["random_seeds"]:
+        raise BaselineModelError(
+            f"random_state={random_state!r} is not in configured random_seeds {dt_cfg['random_seeds']!r}."
+        )
+
+    x_train = _validate_feature_matrix(features)
+    y_train = _validate_labels(labels, len(x_train), require_both_classes=True)
+    sample_weight = compute_sample_weights(
+        y_train,
+        weighting_regime,
+        scenario_ids=scenario_ids,
+    )
+
+    pipeline = build_decision_tree_pipeline(
+        max_depth=selected_depth,
+        min_samples_leaf=selected_leaf,
+        criterion=dt_cfg["criterion"],
+        random_state=selected_seed,
+    )
+    if pipeline.named_steps["classifier"].class_weight is not None:
+        raise BaselineModelError("Estimator class_weight must remain None to prevent double-weighting.")
+
+    pipeline.fit(x_train, y_train, classifier__sample_weight=sample_weight)
+    return FittedDecisionTreeBaseline(
+        pipeline=pipeline,
+        weighting_regime=weighting_regime,
+        hyperparameters={
+            "criterion": dt_cfg["criterion"],
+            "max_depth": selected_depth,
+            "min_samples_leaf": selected_leaf,
             "class_weight": None,
         },
         random_state=selected_seed,
