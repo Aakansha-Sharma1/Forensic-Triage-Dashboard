@@ -70,6 +70,23 @@ def test_future_events_do_not_change_prior_event_features():
         assert future_extended[record.event.event_id].features == record.features
 
 
+def test_rolling_counts_preserve_inclusive_window_expiration_boundaries():
+    rows = [
+        event("2026-01-01T00:00:00Z", event_type="POST", status="500"),
+        event("2026-01-01T00:05:00Z"),
+        event("2026-01-01T00:05:00.000001Z"),
+    ]
+
+    records = extract_features(rows, CASE_ID, EVIDENCE_ID, ORIGINAL_REFERENCE)
+
+    assert records[1].features["request_frequency_5m"] == 2
+    assert records[1].features["failed_request_frequency_5m"] == 1
+    assert records[1].features["post_request_frequency_5m"] == 1
+    assert records[2].features["request_frequency_5m"] == 2
+    assert records[2].features["failed_request_frequency_5m"] == 0
+    assert records[2].features["post_request_frequency_5m"] == 0
+
+
 def test_traceability_is_separate_from_numerical_model_inputs():
     record = extract_features(
         [event("2026-01-01T00:00:00Z")],

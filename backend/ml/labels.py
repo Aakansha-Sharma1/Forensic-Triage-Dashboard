@@ -136,9 +136,42 @@ def _source_entries(source_manifest: Mapping[str, object]) -> dict[str, dict]:
 
 
 class _LabelPreparation:
-    def __init__(self, source_manifest: Mapping[str, object]) -> None:
+    def __init__(
+        self,
+        source_manifest: Mapping[str, object],
+        *,
+        scenario_id: str,
+        simulation_start: datetime,
+        simulation_end: datetime,
+    ) -> None:
         self.source_manifest = source_manifest
         self.sources = _source_entries(source_manifest)
+        if not isinstance(scenario_id, str) or not scenario_id.strip():
+            raise LabelPreparationError("scenario_id must be a non-empty string.")
+        if not isinstance(simulation_start, datetime) or not isinstance(
+            simulation_end, datetime
+        ):
+            raise LabelPreparationError("Simulation boundaries must be datetimes.")
+        if simulation_start.tzinfo is None:
+            simulation_start = simulation_start.replace(tzinfo=timezone.utc)
+        if simulation_end.tzinfo is None:
+            simulation_end = simulation_end.replace(tzinfo=timezone.utc)
+        self.simulation_start = simulation_start.astimezone(timezone.utc)
+        self.simulation_end = simulation_end.astimezone(timezone.utc)
+        if self.simulation_start >= self.simulation_end:
+            raise LabelPreparationError(
+                "Simulation start must be earlier than simulation end."
+            )
+        self.scenario_id = scenario_id.strip()
+        source_scenarios = {
+            entry.get("scenario_id")
+            for entry in self.sources.values()
+            if entry.get("scenario_id") is not None
+        }
+        if source_scenarios != {self.scenario_id}:
+            raise LabelPreparationError(
+                "Requested scenario_id does not match the prepared source manifest."
+            )
         self.seen_event_ids: set[str] = set()
         self.repeated_event_ids: Counter[str] = Counter()
         self.duplicate_examples: list[str] = []
@@ -284,14 +317,14 @@ class _LabelPreparation:
             )
 
         timestamp = _parse_utc_timestamp(event.get("timestamp"), record_number)
-        if timestamp < RUSSELLMITCHELL_SIMULATION_START:
+        if timestamp < self.simulation_start:
             self.excluded_before_start += 1
             self.source_counts[source_filename][
                 "excluded_outside_simulation_period"
             ] += 1
             self.explicit_attack_excluded += int(bool(labels))
             return None
-        if timestamp >= RUSSELLMITCHELL_SIMULATION_END:
+        if timestamp >= self.simulation_end:
             self.excluded_at_or_after_end += 1
             self.source_counts[source_filename][
                 "excluded_outside_simulation_period"
@@ -403,7 +436,7 @@ class _LabelPreparation:
             "source_url": self.source_manifest.get("source_url", AIT_LDS_SOURCE_URL),
             "version": self.source_manifest.get("version", AIT_LDS_VERSION),
             "license": self.source_manifest.get("license", AIT_LDS_LICENSE),
-            "scenario_id": "russellmitchell",
+            "scenario_id": self.scenario_id,
             "label_policy": {
                 "policy_id": LABEL_POLICY_ID,
                 "source": AIT_LDS_SOURCE_URL,
@@ -423,13 +456,13 @@ class _LabelPreparation:
                 ),
             },
             "simulation_period": {
-                "start_inclusive": RUSSELLMITCHELL_SIMULATION_START.isoformat(),
-                "end_exclusive": RUSSELLMITCHELL_SIMULATION_END.isoformat(),
+                "start_inclusive": self.simulation_start.isoformat(),
+                "end_exclusive": self.simulation_end.isoformat(),
                 "timezone": "UTC",
                 "source": (
-                    "Official Zenodo record 19483937 Russell Mitchell simulation-time "
-                    "table; the record does not state a timezone, so UTC is used to "
-                    "match the selected Apache log timestamps."
+                    f"Official Zenodo record 19483937 {self.scenario_id} "
+                    "simulation-time table and scenario metadata; timezone is "
+                    "normalized to UTC to match event timestamps."
                 ),
                 "exclusion_rule": (
                     "Events before the start or at/after the end are excluded from "
@@ -482,7 +515,7 @@ class _LabelPreparation:
                 "explicit labels and provenance, and derive normal labels only for "
                 "events absent from a complete, mirrored label file with zero import "
                 "rejections. Retain unknowns for uncovered sources. Filter evaluation "
-                "records to the official Russell Mitchell UTC simulation interval. "
+                "records to the configured scenario's official UTC simulation interval. "
                 "No detection-rule findings or model outputs are used."
             ),
         }
@@ -529,6 +562,10 @@ def prepare_labelled_dataset(
     prepared_records_path: str | Path,
     prepared_manifest_path: str | Path,
     output_dir: str | Path,
+    *,
+    scenario_id: str = "russellmitchell",
+    simulation_start: datetime = RUSSELLMITCHELL_SIMULATION_START,
+    simulation_end: datetime = RUSSELLMITCHELL_SIMULATION_END,
 ) -> dict:
     """Write a separately labelled, simulation-window-only evaluation dataset."""
     records_path = Path(prepared_records_path).resolve()
@@ -544,7 +581,6 @@ def prepare_labelled_dataset(
         raise LabelPreparationError(
             "Labelled output must be separate from the prepared dataset and manifest."
         )
-    destination_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         manifest_bytes = manifest_path.read_bytes()
@@ -562,12 +598,17 @@ def prepare_labelled_dataset(
             "Prepared dataset manifest must contain a valid processed-output SHA-256."
         )
 
+    run = _LabelPreparation(
+        source_manifest,
+        scenario_id=scenario_id,
+        simulation_start=simulation_start,
+        simulation_end=simulation_end,
+    )
     destination_dir.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=".labelled_events.", suffix=".tmp", dir=destination_dir
     )
     temporary_path = Path(temporary_name)
-    run = _LabelPreparation(source_manifest)
     input_digest = hashlib.sha256()
     output_digest = hashlib.sha256()
     try:

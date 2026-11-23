@@ -1,20 +1,30 @@
 import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
+
+import pytest
 
 from backend.ml.labels import (
     LABELLED_RECORDS_FILENAME,
     LABEL_MANIFEST_FILENAME,
+    LabelPreparationError,
     prepare_labelled_dataset,
 )
 
 
-def source_entry(source_filename, *, coverage=True, physical_lines=1):
+def source_entry(
+    source_filename,
+    *,
+    coverage=True,
+    physical_lines=1,
+    scenario_id="russellmitchell",
+):
     source_hash = hashlib.sha256(source_filename.encode("utf-8")).hexdigest()
     entry = {
         "source_filename": source_filename,
         "source_reference": f"raw/gather/{source_filename}",
-        "scenario_id": "russellmitchell",
+        "scenario_id": scenario_id,
         "source_sha256": source_hash,
         "physical_line_count": physical_lines,
         "parsed_record_count": physical_lines,
@@ -50,6 +60,7 @@ def event_record(
     event_id=None,
     ground_truth=None,
     ground_truth_provenance=None,
+    scenario_id="russellmitchell",
 ):
     return {
         "event": {
@@ -60,7 +71,7 @@ def event_record(
             "source_filename": source,
             "source_line_number": line_number,
             "source_sha256": source_hash,
-            "scenario_id": "russellmitchell",
+            "scenario_id": scenario_id,
         },
         "features": {"request_frequency_5m": line_number},
         "ground_truth": ground_truth,
@@ -288,3 +299,58 @@ def test_labelled_dataset_and_manifest_are_reproducible_without_replacing_inputs
     assert label_manifest_path.read_bytes() == first_manifest_bytes
     assert records_path.read_bytes() == original_records
     assert manifest_path.exists()
+
+
+def test_scenario_period_and_identifier_can_be_selected_from_official_metadata(
+    tmp_path,
+):
+    source_name = "intranet/access.log"
+    source = source_entry(
+        source_name, scenario_id="santos", physical_lines=1
+    )
+    record = event_record(
+        source_name,
+        source["source_sha256"],
+        1,
+        "2022-01-14T00:00:00Z",
+        scenario_id="santos",
+    )
+    records_path, manifest_path, _ = write_inputs(tmp_path, [source], [record])
+
+    manifest = prepare_labelled_dataset(
+        records_path,
+        manifest_path,
+        tmp_path,
+        scenario_id="santos",
+        simulation_start=datetime(2022, 1, 14, tzinfo=timezone.utc),
+        simulation_end=datetime(2022, 1, 18, tzinfo=timezone.utc),
+    )
+    labelled = read_labelled_records(tmp_path / LABELLED_RECORDS_FILENAME)
+
+    assert manifest["scenario_id"] == "santos"
+    assert (
+        manifest["simulation_period"]["start_inclusive"]
+        == "2022-01-14T00:00:00+00:00"
+    )
+    assert (
+        manifest["simulation_period"]["end_exclusive"]
+        == "2022-01-18T00:00:00+00:00"
+    )
+    assert labelled[0]["research_label"] == 0
+
+
+def test_scenario_mismatch_is_rejected_before_creating_output(tmp_path):
+    source_name = "intranet/access.log"
+    source = source_entry(source_name, scenario_id="santos")
+    records_path, manifest_path, _ = write_inputs(tmp_path, [source], [])
+    output_dir = tmp_path / "not-created"
+
+    with pytest.raises(LabelPreparationError, match="does not match"):
+        prepare_labelled_dataset(
+            records_path,
+            manifest_path,
+            output_dir,
+            scenario_id="harrison",
+        )
+
+    assert not output_dir.exists()

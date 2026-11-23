@@ -32,6 +32,8 @@ def engineer_features(events: Iterable[CanonicalEvent]) -> list[FeatureRecord]:
     indexed_events.sort(key=lambda item: (item[1].timestamp, item[0]))
 
     histories = defaultdict(deque)
+    failed_counts = defaultdict(int)
+    post_counts = defaultdict(int)
     previous_timestamps = {}
     seen_resources = defaultdict(set)
     records = []
@@ -53,11 +55,15 @@ def engineer_features(events: Iterable[CanonicalEvent]) -> list[FeatureRecord]:
             history = histories[source_ip]
             cutoff = event.timestamp - window
             while history and history[0][0] < cutoff:
-                history.popleft()
+                _, expired_failed, expired_post = history.popleft()
+                failed_counts[source_ip] -= expired_failed
+                post_counts[source_ip] -= expired_post
             history.append((event.timestamp, is_failed, is_post))
+            failed_counts[source_ip] += is_failed
+            post_counts[source_ip] += is_post
             request_frequency = len(history)
-            failed_request_frequency = sum(item[1] for item in history)
-            post_request_frequency = sum(item[2] for item in history)
+            failed_request_frequency = failed_counts[source_ip]
+            post_request_frequency = post_counts[source_ip]
             previous_timestamp = previous_timestamps.get(source_ip)
             time_since_previous = (
                 (event.timestamp - previous_timestamp).total_seconds()
