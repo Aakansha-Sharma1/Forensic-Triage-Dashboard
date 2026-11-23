@@ -44,6 +44,12 @@ from .splits import (
     SplitPreparationError,
     create_split_manifest,
 )
+from .quality import (
+    QUALITY_REPORT_PATH,
+    QUALITY_REPORT_SCHEMA_VERSION,
+    QualityAuditError,
+    create_quality_report,
+)
 
 __all__ = [
     "FEATURE_SCHEMA",
@@ -67,6 +73,9 @@ __all__ = [
     "PreparedApacheSource",
     "PreparedDatasetRecord",
     "RejectedRow",
+    "QUALITY_REPORT_PATH",
+    "QUALITY_REPORT_SCHEMA_VERSION",
+    "QualityAuditError",
     "RUSSELLMITCHELL_SIMULATION_END",
     "RUSSELLMITCHELL_SIMULATION_START",
     "SCENARIO_IDS",
@@ -75,6 +84,7 @@ __all__ = [
     "SplitPreparationError",
     "canonicalize_events",
     "create_dataset_manifest",
+    "create_quality_report",
     "create_split_manifest",
     "extract_selected_archive_members",
     "engineer_features",

@@ -1,0 +1,1 @@
+{"line":2,"labels":["synthetic_attack_example"],"rules":{"synthetic_attack_example":["synthetic fixture only"]}}

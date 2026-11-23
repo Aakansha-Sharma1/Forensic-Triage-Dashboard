@@ -275,17 +275,22 @@ async def analyze_evidence(case_id: int):
         # Integrity passed. Existing findings may now be replaced by a successful analysis.
         connection.execute(
             "DELETE FROM findings WHERE evidence_id IN (SELECT id FROM evidence WHERE case_id = ?)",
-            (case_id,),
+            (case_id,)
         )
 
         analysis_results = []
+
         # Process only integrity-verified evidence items.
         for ev_id, ev_code, working_path in verified_evidence:
+            # Detect threats
             findings = detect_threats(working_path, ev_id)
+
+            # Store findings in database
             created_at = datetime.now(timezone.utc).isoformat()
 
             for finding in findings:
                 finding_id = f"FD-{ev_id}-{uuid4().hex[:8].upper()}"
+
                 connection.execute(
                     """
                     INSERT INTO findings (
@@ -311,16 +316,16 @@ async def analyze_evidence(case_id: int):
                     (
                         finding_id,
                         ev_id,
-                        finding.get("event_id"),
-                        finding.get("timestamp"),
-                        finding.get("source"),
-                        finding.get("event_type"),
-                        finding.get("resource"),
-                        finding.get("reason"),
-                        finding.get("severity"),
-                        finding.get("technical_observation"),
-                        finding.get("plain_language_explanation"),
-                        "Requires Review",
+                        finding.get('event_id'),
+                        finding.get('timestamp'),
+                        finding.get('source'),
+                        finding.get('event_type'),
+                        finding.get('resource'),
+                        finding.get('reason'),
+                        finding.get('severity'),
+                        finding.get('technical_observation'),
+                        finding.get('plain_language_explanation'),
+                        'Requires Review',
                         created_at,
                         finding["rule_id"],
                         RULE_REGISTRY[finding["rule_id"]]["version"],
@@ -329,13 +334,13 @@ async def analyze_evidence(case_id: int):
                 )
 
                 analysis_results.append({
-                    "finding_id": finding_id,
-                    "event_id": finding.get("event_id"),
-                    "severity": finding.get("severity"),
-                    "reason": finding.get("reason"),
-                    "rule_id": finding["rule_id"],
-                    "rule_version": RULE_REGISTRY[finding["rule_id"]]["version"],
-                    "rule_fingerprint": rules_fingerprint,
+                    'finding_id': finding_id,
+                    'event_id': finding.get('event_id'),
+                    'severity': finding.get('severity'),
+                    'reason': finding.get('reason'),
+                    'rule_id': finding["rule_id"],
+                    'rule_version': RULE_REGISTRY[finding["rule_id"]]["version"],
+                    'rule_fingerprint': rules_fingerprint,
                 })
 
         append_audit_event(
@@ -356,8 +361,8 @@ async def analyze_evidence(case_id: int):
             'findings_count': len(analysis_results),
             'findings': analysis_results
         }
-
     except HTTPException:
+        connection.rollback()
         raise
     except Exception as exc:
         connection.rollback()
@@ -1213,25 +1218,13 @@ def record_chain_of_custody(evidence_id: int, entry: ChainOfCustodyEntry):
     
     # Verify evidence exists
     evidence = connection.execute(
-        "SELECT id FROM evidence WHERE id = ?",
+        "SELECT id, case_id, evidence_id FROM evidence WHERE id = ?",
         (evidence_id,)
     ).fetchone()
     
     if not evidence:
         connection.close()
         raise HTTPException(status_code=404, detail="Evidence not found")
-
-    evidence_row = connection.execute(
-        "SELECT id, case_id, evidence_id FROM evidence WHERE id = ?",
-        (evidence_id,)
-    ).fetchone()
-
-    if not evidence_row:
-        connection.close()
-        raise HTTPException(status_code=404, detail="Evidence not found")
-
-    case_id = evidence_row["case_id"]
-    evidence_code = evidence_row["evidence_id"]
 
     person = (entry.person or "").strip()
     action = (entry.action or "").strip()
@@ -1266,14 +1259,18 @@ def record_chain_of_custody(evidence_id: int, entry: ChainOfCustodyEntry):
                 remarks,
             ),
         )
-
         append_audit_event(
             connection,
             action_type="CHAIN_OF_CUSTODY_UPDATED",
-            case_id=case_id,
-            evidence_id=evidence_code,
+            case_id=evidence["case_id"],
+            evidence_id=evidence["evidence_id"],
             outcome="SUCCESS",
-            metadata={"entry_id": cursor.lastrowid, "person": person, "action": action, "remarks": remarks},
+            metadata={
+                "entry_id": cursor.lastrowid,
+                "person": person,
+                "action": action,
+                "remarks": remarks,
+            },
         )
         connection.commit()
         
@@ -1498,7 +1495,7 @@ def generate_pdf_report(case_id: int) -> tuple[str, str]:
         story.append(Paragraph("FORENSIC CASE REPORT", title_style))
         story.append(Spacer(1, 0.1*inch))
 
-        # Report metadata block (report SHA-256 is computed post-build and returned by the API response).
+        # Report metadata block (report SHA-256 is computed post-build and returned by API response).
         metadata_text = f"""
         <b>Report ID:</b> {report_filename}<br/>
         <b>Case Number:</b> {case_dict['case_number']}<br/>
@@ -1913,6 +1910,7 @@ def generate_case_report(case_id: int):
                 "generated_at": datetime.now(timezone.utc).isoformat()
             }
         }
+
     except HTTPException as exc:
         append_audit_event(
             connection,
@@ -1966,6 +1964,12 @@ def download_report(case_id: int, path: str):
         raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
 
 
+@app.get("/rules")
+def get_rules_endpoint():
+    """Return read-only metadata for the active detection rules."""
+    return get_rule_metadata()
+
+
 @app.get("/audit")
 def get_audit_history_endpoint(case_id: int | None = None, evidence_id: str | None = None):
     """Retrieve audit history; records are read-only through the application."""
@@ -1979,12 +1983,6 @@ def get_audit_history_endpoint(case_id: int | None = None, evidence_id: str | No
         connection.close()
 
 
-@app.get("/rules")
-def get_rules_endpoint():
-    """Return read-only metadata for the active detection rules."""
-    return get_rule_metadata()
-
-
 @app.get("/audit/verify")
 def verify_audit_endpoint():
     connection = get_connection()
@@ -1995,6 +1993,7 @@ def verify_audit_endpoint():
 
 
 # Serve static assets from frontend directory at /static
+# Mount AFTER all API routes so that /cases, /evidence, etc. are not intercepted
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 if FRONTEND_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
