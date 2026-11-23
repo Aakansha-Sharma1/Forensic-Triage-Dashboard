@@ -1,0 +1,419 @@
+{
+  "config_schema_version": "1.0.0",
+  "experiment_id": "ait-lds-v2.1-4scenario-loso-exploratory-v1",
+  "study_status": "exploratory",
+  "dataset_provenance": {
+    "dataset_name": "AIT Log Data Set V2.1",
+    "version": "v2_1",
+    "source_url": "https://zenodo.org/records/19483937",
+    "license": "CC-BY-NC-SA-4.0",
+    "feature_schema_version": "1.0.0",
+    "label_schema_version": "1.0.0",
+    "split_manifest": {
+      "path": "research_datasets/ait-lds-v2.1/splits/four_scenario_split_manifest.json",
+      "sha256": "48c76c8964c303354e1351300661accc7248ddaba143a25cd865c7bc1b4b2694",
+      "scientifically_adequate": false,
+      "selected_assignment": null
+    },
+    "quality_report": {
+      "path": "research_datasets/ait-lds-v2.1/quality/four_scenario_quality_report.json",
+      "sha256": "ade042324b5640a0aca081e3c4b8463fb7dbe4e7de51f737feef790b9c983517",
+      "expected_quality_status": "passed_with_research_limitations"
+    },
+    "scenarios": {
+      "fox": {
+        "label_manifest_path": "research_datasets/ait-lds-v2.1/processed/fox/labels_manifest.json",
+        "label_manifest_sha256": "a232d35ab359ea6dd575545a46a33b536cca3265f12716f67d2b5163a73097b4",
+        "labelled_records_sha256": "55e7d7a2e841e0c3dff1c7fadf6e7e011d77242711cb36316521be74315faf41",
+        "prepared_manifest_sha256": "ebf2f2453567b376fd7740fa63e4011588c81050b8596c2cadeba8bc3572dcda",
+        "prepared_records_sha256": "e25c78dafe39b21972d99abfd396e2a3107fa78b93866dcfc22008371c4dc492"
+      },
+      "harrison": {
+        "label_manifest_path": "research_datasets/ait-lds-v2.1/processed/harrison/labels_manifest.json",
+        "label_manifest_sha256": "1912df6482f05e95efb34a0cd175e893c051ad7cd023be885586ae0b005a4f22",
+        "labelled_records_sha256": "948f2a4ca081b18a1802874bea78c70eb146e2d0b0041b8216f08e0bf2749284",
+        "prepared_manifest_sha256": "530b553eabca77658d7ef767c6c951bdff4a289cc12fcf6d6550bdc1edf16d54",
+        "prepared_records_sha256": "3c0f41a04e86953175d60703cc2d585c220ad751fd98db6f78689f20895aa96d"
+      },
+      "russellmitchell": {
+        "label_manifest_path": "research_datasets/ait-lds-v2.1/processed/labels_manifest.json",
+        "label_manifest_sha256": "15188a011ab8a204b4811e9a35f141b439fca0d5c3424c99825dd7dce0917d7b",
+        "labelled_records_sha256": "075624cf95db7b8eee8273e338929d820721bcac9ece9638c1f69a61065f7acd",
+        "prepared_manifest_sha256": "c3917cf26561fa749eb74c099e6cf0be746374836ce9e5fa86b0602535e0d372",
+        "prepared_records_sha256": "e12254f96bedc8e43f56f5b2915fcc95ca93ff6bcd60dbe5d68c503ee63b9323"
+      },
+      "santos": {
+        "label_manifest_path": "research_datasets/ait-lds-v2.1/processed/santos/labels_manifest.json",
+        "label_manifest_sha256": "53c64bc4b8a316817053b58e1bd0eb542d499531a1d3b2917619a473329b502f",
+        "labelled_records_sha256": "b5d880f9676fbed1608129b30995c8df54ea73627910c226f34e2848139cfecd",
+        "prepared_manifest_sha256": "22b8fcb6c86c95151dd97fc553484ec91bd85987d05bdae686f4de3adec81d6e",
+        "prepared_records_sha256": "e38d50237438f891a822fb1dd91a380f64f4e0ca0a40df8d2c810396bf7e6b83"
+      }
+    }
+  },
+  "label_definition": {
+    "positive_class": {
+      "value": 1,
+      "name": "attack_associated"
+    },
+    "negative_class": {
+      "value": 0,
+      "name": "normal"
+    },
+    "excluded_class": {
+      "value": null,
+      "name": "unknown",
+      "exclude_from_supervised": true
+    },
+    "normal_false_alarm_metric": {
+      "name": "normal_false_positive_rate",
+      "formula": "FP / (FP + TN)",
+      "definition": "Proportion of true normal (0) events incorrectly predicted as attack_associated (1)."
+    }
+  },
+  "features": {
+    "schema_version": "1.0.0",
+    "ordered_names": [
+      "transfer_size_bytes",
+      "request_frequency_5m",
+      "failed_request_frequency_5m",
+      "post_request_frequency_5m",
+      "time_since_previous_event_seconds",
+      "unique_resources_accessed",
+      "sensitive_resource_indicator",
+      "source_ip_missing",
+      "event_type_missing",
+      "resource_missing",
+      "response_status_missing",
+      "transfer_size_missing",
+      "time_since_previous_event_missing"
+    ],
+    "log1p_transform_features": [
+      "transfer_size_bytes",
+      "request_frequency_5m",
+      "failed_request_frequency_5m",
+      "post_request_frequency_5m",
+      "time_since_previous_event_seconds",
+      "unique_resources_accessed"
+    ],
+    "binary_indicator_features": [
+      "sensitive_resource_indicator",
+      "source_ip_missing",
+      "event_type_missing",
+      "resource_missing",
+      "response_status_missing",
+      "transfer_size_missing",
+      "time_since_previous_event_missing"
+    ],
+    "excluded_metadata_fields": [
+      "case_id",
+      "evidence_id",
+      "event_id",
+      "timestamp",
+      "source_ip",
+      "event_type",
+      "resource",
+      "response_status",
+      "transfer_size",
+      "original_evidence_reference",
+      "ground_truth",
+      "ground_truth_provenance",
+      "research_label",
+      "research_label_name",
+      "research_label_basis",
+      "research_label_provenance"
+    ]
+  },
+  "preprocessing": {
+    "fit_scope": "training_partition_only",
+    "resampling_allowed": false,
+    "imputation": {
+      "strategy": "median",
+      "fit_on": "train_only",
+      "fallback_value": 0.0
+    },
+    "linear_models": {
+      "apply_log1p": true,
+      "scaler": "StandardScaler",
+      "fit_on": "train_only"
+    },
+    "tree_models": {
+      "apply_log1p": false,
+      "scaler": null,
+      "fit_on": "train_only"
+    }
+  },
+  "runtime_dependencies": {
+    "required_packages": ["numpy", "scikit-learn"],
+    "installed_in_this_step": false
+  },
+  "weighting_policy": {
+    "mechanism": "sample_weight_only",
+    "estimator_class_weight": null,
+    "double_weighting_prohibited": true,
+    "normalization": "sum_to_n_train_mean_1.0",
+    "regimes": [
+      {
+        "name": "class_weighted",
+        "formula": "n_train / (2 * n_train_class)",
+        "description": "Inverse class-frequency sample weights computed on the pooled training partition only; total weight sums to n_train (mean 1.0)."
+      },
+      {
+        "name": "scenario_equalized_class_weighted",
+        "formula": "n_train / (2 * n_train_scenarios * n_scenario_class)",
+        "description": "Each training scenario receives equal total weight (n_train / n_train_scenarios), split equally between normal (0) and attack_associated (1) within each scenario, computed on the training partition only; total weight sums to n_train (mean 1.0)."
+      }
+    ]
+  },
+  "random_seeds": [42, 137, 256, 512, 1024],
+  "evaluation_protocol": {
+    "strategy": "nested_4fold_loso",
+    "outer_test_isolation": true,
+    "selection_scope": "inner_validation_only",
+    "selection_mode": "joint_hyperparameter_and_threshold",
+    "selection_aggregation": "mean_across_inner_validation_folds_and_seeds",
+    "tie_breaking": {
+      "threshold_priority": [
+        "closest_to_0.5",
+        "smaller_threshold"
+      ],
+      "hyperparameter_priority": "configured_grid_order"
+    },
+    "refit_selected_on_outer_train": true,
+    "threshold_selection": {
+      "fit_scope": "inner_validation_only",
+      "objective": "macro_f1",
+      "fixed_threshold": 0.5,
+      "candidate_thresholds": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+      "report_fixed_and_selected_separately": true,
+      "calibration_assumed": false,
+      "calibration_note": "Predicted probabilities from LogisticRegression and tree models are not assumed calibrated; evaluate Brier score and calibration diagnostics before interpreting scores as probabilities."
+    },
+    "outer_folds": [
+      {
+        "fold_id": "outer_test_fox",
+        "test_scenarios": ["fox"],
+        "outer_train_scenarios": ["harrison", "russellmitchell", "santos"],
+        "inner_candidates": [
+          {
+            "candidate_id": "324d6871770cfdf8",
+            "train_scenarios": ["russellmitchell", "santos"],
+            "validation_scenarios": ["harrison"]
+          },
+          {
+            "candidate_id": "12104a425b29c111",
+            "train_scenarios": ["harrison", "santos"],
+            "validation_scenarios": ["russellmitchell"]
+          },
+          {
+            "candidate_id": "73d0e56f95217ffa",
+            "train_scenarios": ["harrison", "russellmitchell"],
+            "validation_scenarios": ["santos"]
+          }
+        ]
+      },
+      {
+        "fold_id": "outer_test_harrison",
+        "test_scenarios": ["harrison"],
+        "outer_train_scenarios": ["fox", "russellmitchell", "santos"],
+        "inner_candidates": [
+          {
+            "candidate_id": "a2916a77c34330d3",
+            "train_scenarios": ["russellmitchell", "santos"],
+            "validation_scenarios": ["fox"]
+          },
+          {
+            "candidate_id": "f723984e4ce9471d",
+            "train_scenarios": ["fox", "santos"],
+            "validation_scenarios": ["russellmitchell"]
+          },
+          {
+            "candidate_id": "28f25251ade4c244",
+            "train_scenarios": ["fox", "russellmitchell"],
+            "validation_scenarios": ["santos"]
+          }
+        ]
+      },
+      {
+        "fold_id": "outer_test_russellmitchell",
+        "test_scenarios": ["russellmitchell"],
+        "outer_train_scenarios": ["fox", "harrison", "santos"],
+        "inner_candidates": [
+          {
+            "candidate_id": "a5a224015b90bfcf",
+            "train_scenarios": ["harrison", "santos"],
+            "validation_scenarios": ["fox"]
+          },
+          {
+            "candidate_id": "04d02d6d7201ff4b",
+            "train_scenarios": ["fox", "santos"],
+            "validation_scenarios": ["harrison"]
+          },
+          {
+            "candidate_id": "a61ae9868feb2b0d",
+            "train_scenarios": ["fox", "harrison"],
+            "validation_scenarios": ["santos"]
+          }
+        ]
+      },
+      {
+        "fold_id": "outer_test_santos",
+        "test_scenarios": ["santos"],
+        "outer_train_scenarios": ["fox", "harrison", "russellmitchell"],
+        "inner_candidates": [
+          {
+            "candidate_id": "3093715b6ca6b04b",
+            "train_scenarios": ["harrison", "russellmitchell"],
+            "validation_scenarios": ["fox"]
+          },
+          {
+            "candidate_id": "03c9819e2be8ed40",
+            "train_scenarios": ["fox", "russellmitchell"],
+            "validation_scenarios": ["harrison"]
+          },
+          {
+            "candidate_id": "8f72afc9f320b325",
+            "train_scenarios": ["fox", "harrison"],
+            "validation_scenarios": ["russellmitchell"]
+          }
+        ]
+      }
+    ]
+  },
+  "models": [
+    {
+      "name": "RuleBaseline_R_A_to_D",
+      "family": "domain_rule_baseline",
+      "probabilistic": false,
+      "preprocessing_profile": null,
+      "uses_weighting_regimes": false,
+      "uses_threshold_tuning": false,
+      "stochastic": false,
+      "rule_registry_version": "1.0.0",
+      "rule_registry_fingerprint": "fa4a328f2d820be7ff7bc25efeaf5f5e04fe517fd7b7f38fcb2e85d6946c8447",
+      "rules": ["R-A", "R-B", "R-C", "R-D"],
+      "adapter_requirement": "Read-only canonical-event adapter aligned to each held-out scenario's verified labelled source file without modifying detect_threats() or RULE_REGISTRY.",
+      "binary_prediction_rule": "1 if at least one of R-A, R-B, R-C, or R-D triggers on the event; otherwise 0.",
+      "not_applicable_metrics": [
+        "pr_auc_attack",
+        "pr_auc_normal",
+        "brier_score"
+      ],
+      "methodological_caveats": [
+        "Rule R-C clears post_requests[source_ip] after firing and therefore emits at most one finding per source IP per file.",
+        "Rules R-C and R-D compute counts and baseline statistics over the full source file (non-causal batch heuristics)."
+      ]
+    },
+    {
+      "name": "DummyClassifier",
+      "family": "reference_baseline",
+      "probabilistic": true,
+      "preprocessing_profile": "tree_models",
+      "uses_weighting_regimes": false,
+      "uses_threshold_tuning": false,
+      "stochastic": true,
+      "hyperparameter_grid": {
+        "strategy": ["most_frequent", "stratified"]
+      }
+    },
+    {
+      "name": "LogisticRegression",
+      "family": "linear",
+      "probabilistic": true,
+      "preprocessing_profile": "linear_models",
+      "uses_weighting_regimes": true,
+      "uses_threshold_tuning": true,
+      "stochastic": false,
+      "fixed_parameters": {
+        "class_weight": null
+      },
+      "hyperparameter_grid": {
+        "C": [0.01, 0.1, 1.0, 10.0],
+        "penalty": ["l2"],
+        "solver": ["lbfgs"],
+        "max_iter": [1000]
+      }
+    },
+    {
+      "name": "DecisionTreeClassifier",
+      "family": "tree",
+      "probabilistic": true,
+      "preprocessing_profile": "tree_models",
+      "uses_weighting_regimes": true,
+      "uses_threshold_tuning": true,
+      "stochastic": true,
+      "fixed_parameters": {
+        "class_weight": null,
+        "criterion": "gini"
+      },
+      "hyperparameter_grid": {
+        "max_depth": [3, 5, 7],
+        "min_samples_leaf": [10, 50]
+      }
+    },
+    {
+      "name": "RandomForestClassifier",
+      "family": "ensemble_tree",
+      "probabilistic": true,
+      "preprocessing_profile": "tree_models",
+      "uses_weighting_regimes": true,
+      "uses_threshold_tuning": true,
+      "stochastic": true,
+      "fixed_parameters": {
+        "class_weight": null,
+        "criterion": "gini",
+        "bootstrap": true
+      },
+      "hyperparameter_grid": {
+        "n_estimators": [100],
+        "max_depth": [5, 10],
+        "min_samples_leaf": [10, 50],
+        "max_features": ["sqrt"]
+      }
+    }
+  ],
+  "metrics": {
+    "primary_selection_metric": "macro_f1",
+    "zero_division": 0,
+    "pr_auc_definitions": {
+      "pr_auc_attack": {
+        "y_true": "y == 1",
+        "y_score": "p_attack"
+      },
+      "pr_auc_normal": {
+        "y_true": "y == 0",
+        "y_score": "1.0 - p_attack"
+      }
+    },
+    "secondary_metrics": [
+      "balanced_accuracy",
+      "attack_precision",
+      "attack_recall",
+      "attack_f1",
+      "normal_precision",
+      "normal_recall",
+      "normal_f1",
+      "pr_auc_attack",
+      "pr_auc_normal",
+      "normal_false_positive_rate",
+      "confusion_matrix",
+      "brier_score",
+      "per_attack_category_recall"
+    ],
+    "reporting_policy": {
+      "report_each_outer_test_scenario_separately": true,
+      "report_fixed_0.5_and_selected_threshold_separately": true,
+      "aggregate_across_seeds": "mean_and_std",
+      "aggregate_across_outer_folds": "macro_mean_std_min_max",
+      "select_best_outer_fold_or_seed_allowed": false
+    }
+  },
+  "scientific_limitations": [
+    "All four scenarios originate from the same synthetic AIT-LDS v2.1 testbed; results are exploratory and do not establish external validity on production networks.",
+    "Verified binary labels come from one intranet-server Apache log per scenario; host/service effects cannot be separated from scenario effects.",
+    "Unknown-labelled records (617,876 / 42.0%) are excluded from supervised training and evaluation and are never treated as normal.",
+    "Class imbalance is severe and heterogeneous across scenarios (4.67:1 to 197.42:1 attack:normal; 83.84:1 overall), with high-volume dirb scans dominating event counts.",
+    "Identical attack-category vocabularies and repeated feature-vector fingerprints across scenarios indicate shared simulation patterns.",
+    "Source dataset manifests retain scientifically_adequate=false and selected_assignment=null."
+  ]
+}
