@@ -756,6 +756,7 @@ def build_random_forest_pipeline(
     criterion: str = "gini",
     bootstrap: bool = True,
     random_state: int = 42,
+    n_jobs: int | None = None,
 ) -> Pipeline:
     """Construct train-only median imputation + RandomForestClassifier without scaling or log1p."""
     return Pipeline(
@@ -772,6 +773,7 @@ def build_random_forest_pipeline(
                     bootstrap=bool(bootstrap),
                     class_weight=None,
                     random_state=int(random_state),
+                    n_jobs=n_jobs,
                 ),
             ),
         ]
@@ -789,6 +791,7 @@ def train_random_forest_baseline(
     min_samples_leaf: int | None = None,
     max_features: str | None = None,
     random_state: int | None = None,
+    n_jobs: int | None = None,
     config_path: str | Path = DEFAULT_EXPERIMENT_CONFIG_PATH,
 ) -> FittedRandomForestBaseline:
     """Fit a reproducible RandomForestClassifier baseline strictly on training data."""
@@ -848,6 +851,7 @@ def train_random_forest_baseline(
         criterion=rf_cfg["criterion"],
         bootstrap=rf_cfg["bootstrap"],
         random_state=selected_seed,
+        n_jobs=n_jobs,
     )
     if pipeline.named_steps["classifier"].class_weight is not None:
         raise BaselineModelError("Estimator class_weight must remain None to prevent double-weighting.")
