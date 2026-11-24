@@ -37,6 +37,9 @@ uploads/working/
 # Generated reports
 reports/
 
+# Trained deployment ML model artifacts (kept outside Git)
+/models/
+
 # Environment variables, secrets and credentials
 .env
 .env.*
