@@ -24,6 +24,7 @@ from reportlab.lib import colors
 from .database import get_connection, initialize_database
 from .audit import append_audit_event, get_audit_history, verify_audit_chain
 from .rules import RULE_REGISTRY, calculate_rule_fingerprint, get_rule_metadata
+from .ml.advisory_service import MLAdvisoryError, ml_advisory_service
 
 
 initialize_database()
@@ -381,6 +382,61 @@ async def analyze_evidence(case_id: int):
         raise HTTPException(status_code=500, detail=f"Analysis failed: {exc}")
     finally:
         connection.close()
+
+
+@app.post("/cases/{case_id}/ml-advisory")
+def run_ml_advisory_analysis(case_id: int, only_attack_associated: bool = False):
+    """Run optional, strictly read-only ML advisory inference on integrity-verified CSV evidence.
+
+    Does not modify original or working evidence, deterministic R-A through R-D findings,
+    database tables, chain of custody, or audit history. Requires explicit server-side
+    operator authorization and pinned model SHA-256 verification.
+    """
+    try:
+        runtime_config = ml_advisory_service.get_authorized_artifact()
+    except MLAdvisoryError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_detail())
+
+    _ = runtime_config  # Authorization and pinned model hash verified before evidence reads.
+    connection = get_connection()
+    try:
+        case = connection.execute(
+            "SELECT id FROM cases WHERE id = ?",
+            (case_id,),
+        ).fetchone()
+        if not case:
+            raise HTTPException(status_code=404, detail="Case not found")
+
+        evidence_list = connection.execute(
+            "SELECT id, evidence_id, stored_filename, sha256, file_type FROM evidence WHERE case_id = ?",
+            (case_id,),
+        ).fetchall()
+        if not evidence_list:
+            raise HTTPException(status_code=404, detail="No evidence found for this case")
+    finally:
+        connection.close()
+
+    verified_evidence = []
+    for evidence in evidence_list:
+        ev_id = evidence[0]
+        ev_code = evidence[1]
+        original_path = Path(evidence[2])
+        recorded_sha256 = evidence[3]
+        file_type = evidence[4]
+        working_path = WORKING_DIR / f"{ev_code}_working.csv"
+
+        verify_evidence_integrity(ev_code, original_path, working_path, recorded_sha256)
+        validate_evidence_for_analysis(ev_code, file_type, working_path)
+        verified_evidence.append((ev_id, ev_code, original_path, working_path))
+
+    try:
+        return ml_advisory_service.analyze_verified_csv_evidence(
+            case_id=case_id,
+            verified_evidence=verified_evidence,
+            only_attack_associated=only_attack_associated,
+        )
+    except MLAdvisoryError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_detail())
 
 
 @app.get("/cases/{case_id}/findings")
