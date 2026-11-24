@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from itertools import product
 import json
 import math
@@ -17,7 +18,11 @@ from .baselines import (
     train_logistic_regression_baseline,
     train_random_forest_baseline,
 )
-from .evaluation import EvaluationError, evaluate_hard_predictions
+from .evaluation import (
+    EvaluationError,
+    evaluate_hard_predictions,
+    evaluate_probabilistic_predictions,
+)
 from .schema import FEATURE_SCHEMA_VERSION
 from .training_data import (
     DEFAULT_EXPERIMENT_CONFIG_PATH,
@@ -1137,3 +1142,334 @@ def execute_outer_fold_inner_validation(
             )
         )
     return tuple(all_obs)
+
+
+@dataclass(frozen=True)
+class SeedOuterEvaluation:
+    """Outer-test evaluation output for one configured random seed."""
+
+    seed: int
+    model_hyperparameters: Mapping[str, object]
+    evaluation: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "model_hyperparameters",
+            MappingProxyType(dict(self.model_hyperparameters)),
+        )
+        object.__setattr__(
+            self,
+            "evaluation",
+            MappingProxyType(dict(self.evaluation)),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "seed": self.seed,
+            "model_hyperparameters": dict(self.model_hyperparameters),
+            "evaluation": dict(self.evaluation),
+        }
+
+
+@dataclass(frozen=True)
+class OuterFoldEvaluationResult:
+    """Complete JSON-serializable outer-fold refit and untouched test evaluation result."""
+
+    experiment_id: str
+    study_status: str
+    split_manifest_sha256: str
+    quality_report_sha256: str
+    fold_id: str
+    outer_train_scenarios: tuple[str, ...]
+    test_scenarios: tuple[str, ...]
+    scenario_provenance: Mapping[str, Mapping[str, str]]
+    model_name: str
+    weighting_regime: str
+    selected_hyperparameters: Mapping[str, object]
+    fixed_threshold: float
+    selected_threshold: float
+    inner_validation_mean_macro_f1: float
+    outer_train_record_count: int
+    outer_test_record_count: int
+    outer_test_event_ids_sha256: str
+    seeds_evaluated: tuple[int, ...]
+    per_seed_results: tuple[SeedOuterEvaluation, ...]
+    seed_summary: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "scenario_provenance",
+            MappingProxyType(
+                {k: MappingProxyType(dict(v)) for k, v in self.scenario_provenance.items()}
+            ),
+        )
+        object.__setattr__(
+            self,
+            "selected_hyperparameters",
+            MappingProxyType(dict(self.selected_hyperparameters)),
+        )
+        object.__setattr__(
+            self,
+            "seed_summary",
+            MappingProxyType(dict(self.seed_summary)),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "experiment_id": self.experiment_id,
+            "study_status": self.study_status,
+            "split_manifest_sha256": self.split_manifest_sha256,
+            "quality_report_sha256": self.quality_report_sha256,
+            "fold_id": self.fold_id,
+            "outer_train_scenarios": list(self.outer_train_scenarios),
+            "test_scenarios": list(self.test_scenarios),
+            "scenario_provenance": {
+                k: dict(v) for k, v in self.scenario_provenance.items()
+            },
+            "model_name": self.model_name,
+            "weighting_regime": self.weighting_regime,
+            "selected_hyperparameters": dict(self.selected_hyperparameters),
+            "fixed_threshold": self.fixed_threshold,
+            "selected_threshold": self.selected_threshold,
+            "inner_validation_mean_macro_f1": self.inner_validation_mean_macro_f1,
+            "outer_train_record_count": self.outer_train_record_count,
+            "outer_test_record_count": self.outer_test_record_count,
+            "outer_test_event_ids_sha256": self.outer_test_event_ids_sha256,
+            "seeds_evaluated": list(self.seeds_evaluated),
+            "per_seed_results": [r.to_dict() for r in self.per_seed_results],
+            "seed_summary": dict(self.seed_summary),
+        }
+
+
+def _aggregate_seed_metric(values: Sequence[float | None]) -> dict[str, float] | None:
+    if not values or any(v is None for v in values):
+        return None
+    nums = [float(v) for v in values if v is not None]
+    mean_val = sum(nums) / len(nums)
+    variance = sum((x - mean_val) ** 2 for x in nums) / len(nums)
+    return {
+        "mean": mean_val,
+        "std": math.sqrt(variance),
+        "min": min(nums),
+        "max": max(nums),
+    }
+
+
+def _summarize_outer_seed_results(
+    per_seed_results: Sequence[SeedOuterEvaluation],
+) -> dict[str, object]:
+    prob_keys = ("pr_auc_attack", "pr_auc_normal", "brier_score")
+    hard_keys = (
+        "accuracy",
+        "macro_f1",
+        "balanced_accuracy",
+        "attack_precision",
+        "attack_recall",
+        "attack_f1",
+        "normal_precision",
+        "normal_recall",
+        "normal_f1",
+        "normal_false_positive_rate",
+    )
+    return {
+        "probabilistic_metrics": {
+            key: _aggregate_seed_metric(
+                [r.evaluation["probabilistic_metrics"][key] for r in per_seed_results]
+            )
+            for key in prob_keys
+        },
+        "fixed_threshold_metrics": {
+            key: _aggregate_seed_metric(
+                [r.evaluation["fixed_threshold_metrics"][key] for r in per_seed_results]
+            )
+            for key in hard_keys
+        },
+        "selected_threshold_metrics": {
+            key: _aggregate_seed_metric(
+                [r.evaluation["selected_threshold_metrics"][key] for r in per_seed_results]
+            )
+            for key in hard_keys
+        },
+    }
+
+
+def _hash_event_identities(records: Sequence[SupervisedRecord]) -> str:
+    payload = [
+        [r.scenario_id, r.source_filename, r.event_id] for r in records
+    ]
+    serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def _verify_selection_compatibility(
+    plan: NestedLOSOPlan,
+    fold: OuterFoldPlan,
+    model_spec: ModelGridSpec,
+    selection: InnerSelectionResult,
+) -> None:
+    if not isinstance(selection, InnerSelectionResult):
+        raise ExperimentRunnerError("selection must be an InnerSelectionResult.")
+    if (
+        selection.experiment_id != plan.experiment_id
+        or selection.split_manifest_sha256 != plan.split_manifest_sha256
+        or selection.quality_report_sha256 != plan.quality_report_sha256
+    ):
+        raise ExperimentRunnerError(
+            "InnerSelectionResult provenance does not match the verified NestedLOSOPlan."
+        )
+    if selection.fold_id != fold.fold_id:
+        raise ExperimentRunnerError(
+            f"InnerSelectionResult fold_id {selection.fold_id!r} does not match {fold.fold_id!r}."
+        )
+    if selection.excluded_outer_test_scenarios != fold.test_scenarios:
+        raise ExperimentRunnerError(
+            "InnerSelectionResult excluded_outer_test_scenarios does not match fold test_scenarios."
+        )
+    expected_cids = tuple(ic.candidate_id for ic in fold.inner_candidates)
+    if selection.inner_candidate_ids != expected_cids:
+        raise ExperimentRunnerError(
+            "InnerSelectionResult inner_candidate_ids do not match fold inner_candidates."
+        )
+    if selection.model_name != model_spec.name:
+        raise ExperimentRunnerError(
+            f"InnerSelectionResult model_name {selection.model_name!r} does not match {model_spec.name!r}."
+        )
+    if selection.weighting_regime not in model_spec.weighting_regimes:
+        raise ExperimentRunnerError(
+            f"InnerSelectionResult weighting_regime {selection.weighting_regime!r} is not configured for {model_spec.name!r}."
+        )
+    if selection.seeds_used != plan.random_seeds:
+        raise ExperimentRunnerError(
+            f"InnerSelectionResult seeds_used {selection.seeds_used!r} do not match configured random_seeds {plan.random_seeds!r}."
+        )
+    if selection.selected_threshold not in plan.candidate_thresholds:
+        raise ExperimentRunnerError(
+            f"InnerSelectionResult selected_threshold {selection.selected_threshold!r} is not in configured candidate_thresholds."
+        )
+    valid_param_keys = {
+        _canonical_param_key(combo) for combo in model_spec.parameter_combinations
+    }
+    if _canonical_param_key(selection.selected_hyperparameters) not in valid_param_keys:
+        raise ExperimentRunnerError(
+            "InnerSelectionResult selected_hyperparameters are not in configured hyperparameter_grid."
+        )
+
+
+def execute_outer_fold_refit_and_evaluation(
+    plan: NestedLOSOPlan,
+    fold: OuterFoldPlan,
+    model_spec: ModelGridSpec,
+    selection: InnerSelectionResult,
+    outer_train_records: Sequence[SupervisedRecord],
+    outer_test_records: Sequence[SupervisedRecord],
+    *,
+    config_path: str | Path = DEFAULT_EXPERIMENT_CONFIG_PATH,
+) -> OuterFoldEvaluationResult:
+    """Refit an inner-selected configuration on the 3 outer training scenarios and evaluate once on outer test."""
+    if fold not in plan.outer_folds:
+        raise ExperimentRunnerError(f"Fold {fold.fold_id!r} is not part of the validated plan.")
+    if model_spec not in plan.model_specs:
+        raise ExperimentRunnerError(f"Model {model_spec.name!r} is not part of the validated plan.")
+    if model_spec.name not in _TUNABLE_MODEL_NAMES:
+        raise ExperimentRunnerError(
+            f"Model {model_spec.name!r} is not supported by outer-fold refit executor."
+        )
+    _verify_selection_compatibility(plan, fold, model_spec, selection)
+
+    train_ids = _validate_partition_records(
+        outer_train_records,
+        expected_scenarios=fold.outer_train_scenarios,
+        forbidden_scenarios=frozenset(fold.test_scenarios),
+        partition_name="outer_train_records",
+    )
+    test_ids = _validate_partition_records(
+        outer_test_records,
+        expected_scenarios=fold.test_scenarios,
+        forbidden_scenarios=frozenset(fold.outer_train_scenarios),
+        partition_name="outer_test_records",
+    )
+    if not train_ids.isdisjoint(test_ids):
+        raise ExperimentRunnerError(
+            "Record identity overlap detected between outer_train_records and outer_test_records."
+        )
+
+    try:
+        x_train, y_train, train_scenarios = records_to_arrays(outer_train_records)
+        x_test, y_test, _ = records_to_arrays(outer_test_records)
+    except BaselineModelError as exc:
+        raise ExperimentRunnerError(str(exc)) from exc
+
+    has_attack_categories = any(
+        r.label == 1 and bool(r.attack_categories) for r in outer_test_records
+    )
+    test_categories = (
+        [r.attack_categories for r in outer_test_records] if has_attack_categories else None
+    )
+
+    per_seed_results: list[SeedOuterEvaluation] = []
+    for seed in plan.random_seeds:
+        try:
+            fitted = _fit_configured_model(
+                model_spec.name,
+                x_train,
+                y_train,
+                weighting_regime=selection.weighting_regime,
+                train_scenarios=train_scenarios,
+                params=selection.selected_hyperparameters,
+                seed=seed,
+                config_path=config_path,
+            )
+            test_probs = fitted.predict_proba(x_test)
+        except BaselineModelError as exc:
+            raise ExperimentRunnerError(str(exc)) from exc
+
+        try:
+            evaluation = evaluate_probabilistic_predictions(
+                y_test,
+                test_probs,
+                selected_threshold=selection.selected_threshold,
+                fixed_threshold=plan.fixed_threshold,
+                attack_categories=test_categories,
+            )
+        except EvaluationError as exc:
+            raise ExperimentRunnerError(str(exc)) from exc
+
+        per_seed_results.append(
+            SeedOuterEvaluation(
+                seed=seed,
+                model_hyperparameters=fitted.hyperparameters,
+                evaluation=evaluation,
+            )
+        )
+
+    fold_scenarios = fold.outer_train_scenarios + fold.test_scenarios
+    fold_provenance = {
+        s: dict(plan.scenario_provenance[s]) for s in sorted(fold_scenarios)
+    }
+
+    return OuterFoldEvaluationResult(
+        experiment_id=plan.experiment_id,
+        study_status=plan.study_status,
+        split_manifest_sha256=plan.split_manifest_sha256,
+        quality_report_sha256=plan.quality_report_sha256,
+        fold_id=fold.fold_id,
+        outer_train_scenarios=fold.outer_train_scenarios,
+        test_scenarios=fold.test_scenarios,
+        scenario_provenance=fold_provenance,
+        model_name=model_spec.name,
+        weighting_regime=selection.weighting_regime,
+        selected_hyperparameters=selection.selected_hyperparameters,
+        fixed_threshold=plan.fixed_threshold,
+        selected_threshold=selection.selected_threshold,
+        inner_validation_mean_macro_f1=selection.mean_validation_macro_f1,
+        outer_train_record_count=len(outer_train_records),
+        outer_test_record_count=len(outer_test_records),
+        outer_test_event_ids_sha256=_hash_event_identities(outer_test_records),
+        seeds_evaluated=plan.random_seeds,
+        per_seed_results=tuple(per_seed_results),
+        seed_summary=_summarize_outer_seed_results(per_seed_results),
+    )

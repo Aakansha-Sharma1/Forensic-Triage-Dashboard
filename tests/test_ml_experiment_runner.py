@@ -11,6 +11,7 @@ from backend.ml.experiment_runner import (
     build_nested_loso_plan,
     execute_inner_candidate_validation,
     execute_outer_fold_inner_validation,
+    execute_outer_fold_refit_and_evaluation,
     run_nested_loso_plan,
     select_inner_configurations_by_regime,
     select_inner_validation_configuration,
@@ -642,4 +643,143 @@ def test_inner_fold_executor_rejects_outer_test_leakage_duplicates_and_missing_s
     with pytest.raises(ExperimentRunnerError, match="missing expected scenarios"):
         execute_inner_candidate_validation(
             plan, fold, cand, lr_spec, "class_weighted", records_by_scenario[cand.train_scenarios[0]], val_recs, config_path=cfg_path
+        )
+
+
+def test_outer_fold_refit_and_evaluation_is_deterministic_and_reports_all_seeds(tmp_path):
+    cfg_path = _build_synthetic_plan_fixture(
+        tmp_path, mutate_config=_full_baseline_compatible_mutator
+    )
+    plan = build_nested_loso_plan(cfg_path, base_dir=tmp_path)
+    fold = plan.outer_folds[0]  # outer_test_fox
+    lr_spec = next(s for s in plan.model_specs if s.name == "LogisticRegression")
+
+    outer_train_by_scenario = {
+        scenario: _make_synthetic_supervised_records(scenario)
+        for scenario in fold.outer_train_scenarios
+    }
+    outer_train_records = [
+        rec for scenario in fold.outer_train_scenarios for rec in outer_train_by_scenario[scenario]
+    ]
+    outer_test_records = _make_synthetic_supervised_records("fox")
+
+    # Obtain inner-selected config strictly from outer_train_by_scenario (fox untouched)
+    inner_obs = execute_outer_fold_inner_validation(
+        plan,
+        fold,
+        lr_spec,
+        "scenario_equalized_class_weighted",
+        outer_train_by_scenario,
+        config_path=cfg_path,
+    )
+    selection = select_inner_validation_configuration(
+        plan, fold, lr_spec, "scenario_equalized_class_weighted", inner_obs
+    )
+
+    res_1 = execute_outer_fold_refit_and_evaluation(
+        plan,
+        fold,
+        lr_spec,
+        selection,
+        outer_train_records,
+        outer_test_records,
+        config_path=cfg_path,
+    )
+    res_2 = execute_outer_fold_refit_and_evaluation(
+        plan,
+        fold,
+        lr_spec,
+        selection,
+        outer_train_records,
+        outer_test_records,
+        config_path=cfg_path,
+    )
+
+    assert res_1 == res_2
+    assert json.dumps(res_1.to_dict(), sort_keys=True) == json.dumps(
+        res_2.to_dict(), sort_keys=True
+    )
+    assert res_1.fold_id == "outer_test_fox"
+    assert res_1.test_scenarios == ("fox",)
+    assert res_1.seeds_evaluated == plan.random_seeds
+    assert len(res_1.per_seed_results) == len(plan.random_seeds)
+    assert res_1.outer_train_record_count == 60
+    assert res_1.outer_test_record_count == 20
+    assert res_1.fixed_threshold == 0.5
+    assert res_1.selected_threshold == selection.selected_threshold
+
+    for seed_res in res_1.per_seed_results:
+        ev = seed_res.evaluation
+        assert "pr_auc_attack" in ev["probabilistic_metrics"]
+        assert "pr_auc_normal" in ev["probabilistic_metrics"]
+        assert "brier_score" in ev["probabilistic_metrics"]
+        for block_key in ("fixed_threshold_metrics", "selected_threshold_metrics"):
+            block = ev[block_key]
+            assert block["confusion_matrix"]["tn"] + block["confusion_matrix"]["fp"] == 10
+            assert block["confusion_matrix"]["tp"] + block["confusion_matrix"]["fn"] == 10
+            assert block["macro_f1"] >= 0.9
+            assert "normal_false_positive_rate" in block
+            assert "foothold" in block["per_attack_category_recall"]
+
+
+def test_outer_fold_refit_rejects_mismatched_selection_and_scenario_leakage(tmp_path):
+    cfg_path = _build_synthetic_plan_fixture(
+        tmp_path, mutate_config=_full_baseline_compatible_mutator
+    )
+    plan = build_nested_loso_plan(cfg_path, base_dir=tmp_path)
+    fold_fox = plan.outer_folds[0]
+    fold_harrison = plan.outer_folds[1]
+    lr_spec = next(s for s in plan.model_specs if s.name == "LogisticRegression")
+    dt_spec = next(s for s in plan.model_specs if s.name == "DecisionTreeClassifier")
+
+    outer_train_by_scenario = {
+        scenario: _make_synthetic_supervised_records(scenario)
+        for scenario in fold_fox.outer_train_scenarios
+    }
+    outer_train_records = [
+        rec for scenario in fold_fox.outer_train_scenarios for rec in outer_train_by_scenario[scenario]
+    ]
+    outer_test_records = _make_synthetic_supervised_records("fox")
+
+    inner_obs = execute_outer_fold_inner_validation(
+        plan, fold_fox, lr_spec, "class_weighted", outer_train_by_scenario, config_path=cfg_path
+    )
+    selection = select_inner_validation_configuration(
+        plan, fold_fox, lr_spec, "class_weighted", inner_obs
+    )
+
+    # 1. Selection from fold_fox used on fold_harrison
+    with pytest.raises(ExperimentRunnerError, match="fold_id"):
+        execute_outer_fold_refit_and_evaluation(
+            plan, fold_harrison, lr_spec, selection, outer_train_records, outer_test_records, config_path=cfg_path
+        )
+
+    # 2. Selection for LogisticRegression used on DecisionTreeClassifier
+    with pytest.raises(ExperimentRunnerError, match="model_name"):
+        execute_outer_fold_refit_and_evaluation(
+            plan, fold_fox, dt_spec, selection, outer_train_records, outer_test_records, config_path=cfg_path
+        )
+
+    # 3. Outer test record leaked into outer_train_records
+    with pytest.raises(ExperimentRunnerError, match="forbidden scenario"):
+        execute_outer_fold_refit_and_evaluation(
+            plan,
+            fold_fox,
+            lr_spec,
+            selection,
+            [*outer_train_records, outer_test_records[0]],
+            outer_test_records,
+            config_path=cfg_path,
+        )
+
+    # 4. Duplicate record identity in outer_test_records
+    with pytest.raises(ExperimentRunnerError, match="duplicate record identity"):
+        execute_outer_fold_refit_and_evaluation(
+            plan,
+            fold_fox,
+            lr_spec,
+            selection,
+            outer_train_records,
+            [*outer_test_records, outer_test_records[0]],
+            config_path=cfg_path,
         )
