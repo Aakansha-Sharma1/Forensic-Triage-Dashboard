@@ -13,6 +13,7 @@ from backend.ml.experiment_runner import (
     execute_outer_fold_inner_validation,
     execute_outer_fold_refit_and_evaluation,
     run_nested_loso_plan,
+    run_single_outer_fold_experiment,
     select_inner_configurations_by_regime,
     select_inner_validation_configuration,
 )
@@ -782,4 +783,123 @@ def test_outer_fold_refit_rejects_mismatched_selection_and_scenario_leakage(tmp_
             outer_train_records,
             [*outer_test_records, outer_test_records[0]],
             config_path=cfg_path,
+        )
+
+
+def test_single_outer_fold_orchestrator_is_deterministic_and_isolates_outer_test(tmp_path):
+    cfg_path = _build_synthetic_plan_fixture(
+        tmp_path, mutate_config=_full_baseline_compatible_mutator
+    )
+    all_records = {s: _make_synthetic_supervised_records(s) for s in SCENARIOS}
+
+    class _RecordingProvider:
+        def __init__(self, data):
+            self._data = data
+            self.load_order = []
+
+        def load_scenario_records(self, scenario_id: str):
+            self.load_order.append(scenario_id)
+            return self._data[scenario_id]
+
+    p1 = _RecordingProvider(all_records)
+    p2 = _RecordingProvider(all_records)
+
+    res_1 = run_single_outer_fold_experiment(
+        fold_id="outer_test_fox",
+        model_name="DecisionTreeClassifier",
+        weighting_regime="scenario_equalized_class_weighted",
+        record_provider=p1,
+        config_path=cfg_path,
+        base_dir=tmp_path,
+    )
+    res_2 = run_single_outer_fold_experiment(
+        fold_id="outer_test_fox",
+        model_name="DecisionTreeClassifier",
+        weighting_regime="scenario_equalized_class_weighted",
+        record_provider=p2,
+        config_path=cfg_path,
+        base_dir=tmp_path,
+    )
+
+    # Outer test scenario ("fox") must ONLY be loaded AFTER all 3 outer-train scenarios
+    assert p1.load_order == ["harrison", "russellmitchell", "santos", "fox"]
+    assert p2.load_order == ["harrison", "russellmitchell", "santos", "fox"]
+    assert res_1 == res_2
+    payload = res_1.to_dict()
+    assert json.dumps(payload, sort_keys=True) == json.dumps(res_2.to_dict(), sort_keys=True)
+    assert payload["experiment_id"] == "synthetic-4fold-loso"
+    assert payload["fold_id"] == "outer_test_fox"
+    assert payload["model_name"] == "DecisionTreeClassifier"
+    assert payload["weighting_regime"] == "scenario_equalized_class_weighted"
+    assert len(payload["inner_selection"]["inner_candidate_ids"]) == 3
+    assert payload["inner_selection"]["excluded_outer_test_scenarios"] == ["fox"]
+    assert len(payload["outer_evaluation"]["per_seed_results"]) == 2
+    assert payload["split_manifest_sha256"]
+    assert payload["quality_report_sha256"]
+
+
+def test_single_outer_fold_orchestrator_fails_closed_on_leaked_or_invalid_provider(tmp_path):
+    cfg_path = _build_synthetic_plan_fixture(
+        tmp_path, mutate_config=_full_baseline_compatible_mutator
+    )
+    all_records = {s: _make_synthetic_supervised_records(s) for s in SCENARIOS}
+
+    class _DictProvider:
+        def __init__(self, data):
+            self._data = data
+
+        def load_scenario_records(self, scenario_id: str):
+            return self._data[scenario_id]
+
+    # 1. Unknown fold_id
+    with pytest.raises(ExperimentRunnerError, match="Unknown fold_id"):
+        run_single_outer_fold_experiment(
+            fold_id="outer_test_unknown",
+            model_name="LogisticRegression",
+            weighting_regime="class_weighted",
+            record_provider=_DictProvider(all_records),
+            config_path=cfg_path,
+            base_dir=tmp_path,
+        )
+
+    # 2. Provider leaks outer test ("fox") record when asked for "harrison"
+    leaked_data = dict(all_records)
+    leaked_data["harrison"] = [*all_records["harrison"], all_records["fox"][0]]
+    with pytest.raises(ExperimentRunnerError, match="forbidden scenario"):
+        run_single_outer_fold_experiment(
+            fold_id="outer_test_fox",
+            model_name="LogisticRegression",
+            weighting_regime="class_weighted",
+            record_provider=_DictProvider(leaked_data),
+            config_path=cfg_path,
+            base_dir=tmp_path,
+        )
+
+    # 3. Provider returns duplicate event identity
+    dup_data = dict(all_records)
+    dup_data["santos"] = [*all_records["santos"], all_records["santos"][0]]
+    with pytest.raises(ExperimentRunnerError, match="duplicate record identity"):
+        run_single_outer_fold_experiment(
+            fold_id="outer_test_fox",
+            model_name="LogisticRegression",
+            weighting_regime="class_weighted",
+            record_provider=_DictProvider(dup_data),
+            config_path=cfg_path,
+            base_dir=tmp_path,
+        )
+
+    # 4. Provider returns unknown (None) label
+    unknown_rec = SupervisedRecord(
+        **{**all_records["santos"][0].__dict__, "label": None}  # type: ignore[arg-type]
+    )
+    unknown_data = dict(all_records)
+    unknown_data["santos"] = [unknown_rec, *all_records["santos"][1:]]
+    with pytest.raises(ExperimentRunnerError, match="invalid supervised label"):
+        run_single_outer_fold_experiment(
+            fold_id="outer_test_fox",
+            model_name="LogisticRegression",
+            weighting_regime="class_weighted",
+            record_provider=_DictProvider(unknown_data),
+            config_path=cfg_path,
+            base_dir=tmp_path,
         )

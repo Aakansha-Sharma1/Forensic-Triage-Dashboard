@@ -1473,3 +1473,158 @@ def execute_outer_fold_refit_and_evaluation(
         per_seed_results=tuple(per_seed_results),
         seed_summary=_summarize_outer_seed_results(per_seed_results),
     )
+
+
+class ScenarioRecordProvider(Protocol):
+    """Supplies verified SupervisedRecords for one requested scenario ID."""
+
+    def load_scenario_records(self, scenario_id: str) -> Sequence[SupervisedRecord]: ...
+
+
+@dataclass(frozen=True)
+class NestedLOSOFoldRunResult:
+    """JSON-serializable end-to-end result for one outer LOSO fold, model, and weighting regime."""
+
+    experiment_id: str
+    study_status: str
+    split_manifest_sha256: str
+    quality_report_sha256: str
+    fold_id: str
+    model_name: str
+    weighting_regime: str
+    inner_selection: InnerSelectionResult
+    outer_evaluation: OuterFoldEvaluationResult
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "experiment_id": self.experiment_id,
+            "study_status": self.study_status,
+            "split_manifest_sha256": self.split_manifest_sha256,
+            "quality_report_sha256": self.quality_report_sha256,
+            "fold_id": self.fold_id,
+            "model_name": self.model_name,
+            "weighting_regime": self.weighting_regime,
+            "selected_hyperparameters": dict(self.inner_selection.selected_hyperparameters),
+            "fixed_threshold": self.outer_evaluation.fixed_threshold,
+            "selected_threshold": self.inner_selection.selected_threshold,
+            "inner_selection": self.inner_selection.to_dict(),
+            "outer_evaluation": self.outer_evaluation.to_dict(),
+        }
+
+
+def _load_validated_provider_scenario(
+    record_provider: ScenarioRecordProvider,
+    scenario_id: str,
+    *,
+    forbidden_scenarios: frozenset[str],
+) -> tuple[SupervisedRecord, ...]:
+    try:
+        raw_records = record_provider.load_scenario_records(scenario_id)
+    except Exception as exc:
+        raise ExperimentRunnerError(
+            f"Record provider failed while loading scenario {scenario_id!r}: {exc}"
+        ) from exc
+    if not isinstance(raw_records, Sequence) or isinstance(raw_records, (str, bytes)):
+        raise ExperimentRunnerError(
+            f"Record provider for {scenario_id!r} must return a sequence of SupervisedRecord."
+        )
+    records = tuple(raw_records)
+    _validate_partition_records(
+        records,
+        expected_scenarios=(scenario_id,),
+        forbidden_scenarios=forbidden_scenarios,
+        partition_name=f"provider[{scenario_id}]",
+    )
+    return records
+
+
+def run_single_outer_fold_experiment(
+    *,
+    fold_id: str,
+    model_name: str,
+    weighting_regime: str,
+    record_provider: ScenarioRecordProvider,
+    config_path: str | Path = DEFAULT_EXPERIMENT_CONFIG_PATH,
+    base_dir: str | Path | None = None,
+    plan: NestedLOSOPlan | None = None,
+) -> NestedLOSOFoldRunResult:
+    """Orchestrate inner validation, selection, outer refit, and test evaluation for one outer fold."""
+    active_plan = (
+        build_nested_loso_plan(config_path, base_dir=base_dir) if plan is None else plan
+    )
+    fold = next((f for f in active_plan.outer_folds if f.fold_id == fold_id), None)
+    if fold is None:
+        raise ExperimentRunnerError(f"Unknown fold_id {fold_id!r} in validated plan.")
+    model_spec = next((m for m in active_plan.model_specs if m.name == model_name), None)
+    if model_spec is None or model_spec.name not in _TUNABLE_MODEL_NAMES:
+        raise ExperimentRunnerError(
+            f"Model {model_name!r} is not a supported tunable model in validated plan."
+        )
+    if weighting_regime not in model_spec.weighting_regimes:
+        raise ExperimentRunnerError(
+            f"Weighting regime {weighting_regime!r} is not configured for {model_name!r}."
+        )
+
+    # Phase 1: Load ONLY outer-train scenarios for inner validation and selection.
+    all_scenarios_set = frozenset(active_plan.scenario_ids)
+    outer_train_by_scenario: dict[str, tuple[SupervisedRecord, ...]] = {}
+    for scenario_id in fold.outer_train_scenarios:
+        outer_train_by_scenario[scenario_id] = _load_validated_provider_scenario(
+            record_provider,
+            scenario_id,
+            forbidden_scenarios=all_scenarios_set - {scenario_id},
+        )
+
+    inner_observations = execute_outer_fold_inner_validation(
+        active_plan,
+        fold,
+        model_spec,
+        weighting_regime,
+        outer_train_by_scenario,
+        config_path=config_path,
+    )
+    selection = select_inner_validation_configuration(
+        active_plan,
+        fold,
+        model_spec,
+        weighting_regime,
+        inner_observations,
+    )
+
+    # Phase 2: Only after inner selection is frozen, load the held-out outer test scenario.
+    outer_test_records: list[SupervisedRecord] = []
+    for test_scenario in fold.test_scenarios:
+        outer_test_records.extend(
+            _load_validated_provider_scenario(
+                record_provider,
+                test_scenario,
+                forbidden_scenarios=all_scenarios_set - {test_scenario},
+            )
+        )
+
+    outer_train_records = [
+        rec
+        for scenario_id in fold.outer_train_scenarios
+        for rec in outer_train_by_scenario[scenario_id]
+    ]
+    outer_evaluation = execute_outer_fold_refit_and_evaluation(
+        active_plan,
+        fold,
+        model_spec,
+        selection,
+        outer_train_records,
+        outer_test_records,
+        config_path=config_path,
+    )
+
+    return NestedLOSOFoldRunResult(
+        experiment_id=active_plan.experiment_id,
+        study_status=active_plan.study_status,
+        split_manifest_sha256=active_plan.split_manifest_sha256,
+        quality_report_sha256=active_plan.quality_report_sha256,
+        fold_id=fold.fold_id,
+        model_name=model_spec.name,
+        weighting_regime=weighting_regime,
+        inner_selection=selection,
+        outer_evaluation=outer_evaluation,
+    )
