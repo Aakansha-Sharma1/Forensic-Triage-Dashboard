@@ -637,6 +637,227 @@
             color: #666;
         }
 
+        /* ML Advisory Analysis (strictly read-only, separated from deterministic rules) */
+        .ml-advisory-card {
+            border-top: 4px solid #3949ab;
+        }
+
+        .ml-advisory-header {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 12px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #3949ab;
+        }
+
+        .ml-advisory-header h2 {
+            margin-bottom: 0;
+            padding-bottom: 0;
+            border-bottom: none;
+        }
+
+        .ml-advisory-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.4px;
+            background: #e8eaf6;
+            color: #1a237e;
+            border: 1px solid #c5cae9;
+        }
+
+        .ml-advisory-notice {
+            background: #f5f7fa;
+            border-left: 4px solid #3949ab;
+            padding: 12px 14px;
+            border-radius: 4px;
+            font-size: 13px;
+            color: #333;
+            margin-bottom: 16px;
+            line-height: 1.5;
+        }
+
+        .ml-advisory-controls {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 18px;
+        }
+
+        .ml-advisory-controls .btn {
+            width: auto;
+            min-width: 190px;
+        }
+
+        .ml-filter-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 0;
+            font-size: 13px;
+            font-weight: 500;
+            color: #1a1a2e;
+            cursor: pointer;
+        }
+
+        .ml-filter-label input[type="checkbox"] {
+            width: auto;
+            margin: 0;
+            padding: 0;
+            cursor: pointer;
+        }
+
+        .ml-status-banner {
+            display: none;
+            padding: 14px 16px;
+            border-radius: 4px;
+            margin-bottom: 16px;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .ml-status-banner.show {
+            display: block;
+        }
+
+        .ml-status-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+
+        .ml-status-warning {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeeba;
+        }
+
+        .ml-status-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .ml-status-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .ml-meta-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 10px;
+            background: #f5f7fa;
+            padding: 12px 14px;
+            border-radius: 4px;
+            margin-bottom: 16px;
+            font-size: 12px;
+        }
+
+        .ml-meta-label {
+            color: #666;
+            font-weight: 600;
+            display: block;
+            margin-bottom: 2px;
+        }
+
+        .ml-meta-value {
+            color: #1a1a2e;
+            font-family: 'Monaco', 'Courier New', monospace;
+            word-break: break-word;
+        }
+
+        .ml-score-disclaimer {
+            font-size: 12px;
+            color: #4a5568;
+            background: #edf2f7;
+            padding: 8px 12px;
+            border-radius: 4px;
+            margin-bottom: 12px;
+        }
+
+        .ml-advisory-table-wrap {
+            overflow-x: auto;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            margin-bottom: 14px;
+        }
+
+        .ml-pred-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .ml-pred-attack {
+            background: #fdecea;
+            color: #9b1c1c;
+            border: 1px solid #f5c6cb;
+        }
+
+        .ml-pred-normal {
+            background: #e8f5e9;
+            color: #1b5e20;
+            border: 1px solid #c8e6c9;
+        }
+
+        .ml-pagination {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 16px;
+            font-size: 13px;
+            color: #444;
+        }
+
+        .ml-pagination-buttons {
+            display: flex;
+            gap: 8px;
+        }
+
+        .ml-pagination-buttons button {
+            width: auto;
+            padding: 8px 14px;
+        }
+
+        .ml-limitations-box {
+            background: #f9fafb;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            padding: 12px 16px;
+            font-size: 12px;
+            color: #444;
+        }
+
+        .ml-limitations-box h4 {
+            font-size: 13px;
+            color: #1a1a2e;
+            margin-bottom: 8px;
+        }
+
+        .ml-limitations-box ul {
+            margin-left: 18px;
+            line-height: 1.5;
+        }
+
+        .ml-advisory-card button:focus-visible,
+        .ml-advisory-card input:focus-visible {
+            outline: 3px solid #3949ab;
+            outline-offset: 2px;
+        }
+
         @media (max-width: 768px) {
             .main-content {
                 grid-template-columns: 1fr;
@@ -829,6 +1050,121 @@
                 <p>No suspicious events detected in the analyzed evidence</p>
             </div>
         </div>
+
+        <!-- Optional Read-Only ML Advisory Analysis (strictly separate from R-A through R-D findings) -->
+        <section class="card ml-advisory-card" id="mlAdvisorySection" aria-labelledby="mlAdvisoryHeading" style="margin-bottom: 30px;">
+            <div class="ml-advisory-header">
+                <h2 id="mlAdvisoryHeading">🤖 ML Advisory Analysis</h2>
+                <span class="ml-advisory-badge">ADVISORY ONLY • READ-ONLY</span>
+            </div>
+
+            <div class="ml-advisory-notice">
+                Optional machine-learning triage over verified CSV evidence. Results are strictly
+                advisory and do <strong>not</strong> modify deterministic rules (R-A through R-D),
+                official case findings, evidence files, chain-of-custody records, or forensic reports.
+                <strong>Uncalibrated model score — not a calibrated probability or confirmed threat.</strong>
+            </div>
+
+            <div class="ml-advisory-controls">
+                <button type="button" class="btn btn-primary" id="runMlAdvisoryBtn" disabled>
+                    Run ML Advisory
+                </button>
+                <label class="ml-filter-label" for="mlAttackOnlyFilter">
+                    <input type="checkbox" id="mlAttackOnlyFilter" disabled>
+                    <span>Show attack-associated predictions only</span>
+                </label>
+            </div>
+
+            <div id="mlAdvisoryStatus" class="ml-status-banner" role="status" aria-live="polite"></div>
+
+            <div id="mlAdvisoryLoading" class="loading" aria-live="polite">
+                <div class="spinner" aria-hidden="true"></div>
+                <p style="margin-top: 10px;">Running read-only ML advisory analysis...</p>
+            </div>
+
+            <div id="mlAdvisoryResults" style="display: none;">
+                <div class="ml-meta-grid" id="mlModelMetadata" aria-label="ML model metadata">
+                    <div>
+                        <span class="ml-meta-label">Model Identifier</span>
+                        <span class="ml-meta-value" id="mlMetaModelId">-</span>
+                    </div>
+                    <div>
+                        <span class="ml-meta-label">Version</span>
+                        <span class="ml-meta-value" id="mlMetaModelVersion">-</span>
+                    </div>
+                    <div>
+                        <span class="ml-meta-label">Feature Schema</span>
+                        <span class="ml-meta-value" id="mlMetaFeatureSchema">-</span>
+                    </div>
+                    <div>
+                        <span class="ml-meta-label">Decision Threshold</span>
+                        <span class="ml-meta-value" id="mlMetaThreshold">-</span>
+                    </div>
+                    <div>
+                        <span class="ml-meta-label">Mode</span>
+                        <span class="ml-meta-value" id="mlMetaAdvisoryStatus">Advisory Only (Read-Only)</span>
+                    </div>
+                </div>
+
+                <div class="summary-box" aria-label="ML advisory summary counts">
+                    <div class="summary-card">
+                        <div class="number" id="mlTotalEventsNum">0</div>
+                        <div class="label">Events Analyzed</div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="number" id="mlAttackCountNum">0</div>
+                        <div class="label">Attack-Associated</div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="number" id="mlNormalCountNum">0</div>
+                        <div class="label">Normal Predicted</div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="number" id="mlShownCountNum">0</div>
+                        <div class="label">Matching Filter</div>
+                    </div>
+                </div>
+
+                <div class="ml-score-disclaimer">
+                    <strong>Score Semantics:</strong> Uncalibrated model score — not a calibrated probability or confirmed threat.
+                </div>
+
+                <div id="mlAdvisoryEmpty" class="empty-state" style="display: none;">
+                    <p><strong>No advisory predictions match the current view</strong></p>
+                    <p id="mlAdvisoryEmptyDetail">Try disabling the attack-associated filter to view all scored events.</p>
+                </div>
+
+                <div id="mlAdvisoryTableContainer" style="display: none;">
+                    <div class="ml-advisory-table-wrap">
+                        <table id="mlAdvisoryTable" aria-label="Per-event ML advisory predictions">
+                            <thead>
+                                <tr>
+                                    <th scope="col">Evidence / Event Ref</th>
+                                    <th scope="col">Timestamp (UTC)</th>
+                                    <th scope="col">Source &amp; Request</th>
+                                    <th scope="col">Predicted Class</th>
+                                    <th scope="col">Uncalibrated Model Score</th>
+                                </tr>
+                            </thead>
+                            <tbody id="mlAdvisoryTableBody"></tbody>
+                        </table>
+                    </div>
+
+                    <div class="ml-pagination" aria-label="Advisory results pagination">
+                        <span id="mlPageInfo">Page 1 of 1</span>
+                        <div class="ml-pagination-buttons">
+                            <button type="button" class="btn btn-secondary" id="mlPrevPageBtn" disabled>Previous</button>
+                            <button type="button" class="btn btn-secondary" id="mlNextPageBtn" disabled>Next</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="ml-limitations-box" id="mlLimitationsBox" style="display: none;">
+                    <h4>Model &amp; Methodological Limitations</h4>
+                    <ul id="mlLimitationsList"></ul>
+                </div>
+            </div>
+        </section>
     </div>
 
     <!-- PHASE 3: Visual Analysis -->
@@ -1494,6 +1830,25 @@
             });
 
             document.getElementById("analyzeBtn").addEventListener("click", analyzeCase);
+            document.getElementById("runMlAdvisoryBtn").addEventListener("click", runMlAdvisoryAnalysis);
+            document.getElementById("mlAttackOnlyFilter").addEventListener("change", () => {
+                mlAdvisoryState.currentPage = 1;
+                renderMlAdvisoryTable();
+            });
+            document.getElementById("mlPrevPageBtn").addEventListener("click", () => {
+                if (mlAdvisoryState.currentPage > 1) {
+                    mlAdvisoryState.currentPage -= 1;
+                    renderMlAdvisoryTable();
+                }
+            });
+            document.getElementById("mlNextPageBtn").addEventListener("click", () => {
+                const filtered = getFilteredMlPredictions();
+                const totalPages = Math.max(1, Math.ceil(filtered.length / ML_ADVISORY_PAGE_SIZE));
+                if (mlAdvisoryState.currentPage < totalPages) {
+                    mlAdvisoryState.currentPage += 1;
+                    renderMlAdvisoryTable();
+                }
+            });
 
             document.getElementById("closeFindingModal").addEventListener("click", () => {
                 document.getElementById("findingModal").classList.remove("show");
@@ -1536,6 +1891,318 @@
             document.getElementById("analyzeBtn").disabled = !phase2CaseId;
             document.getElementById("analysisResults").style.display = "none";
             document.getElementById("noFindingsState").style.display = "none";
+            resetMlAdvisoryUI();
+        }
+
+        const ML_ADVISORY_PAGE_SIZE = 25;
+        const mlAdvisoryState = {
+            lastResponse: null,
+            currentPage: 1,
+        };
+
+        function resetMlAdvisoryUI() {
+            mlAdvisoryState.lastResponse = null;
+            mlAdvisoryState.currentPage = 1;
+
+            const runBtn = document.getElementById("runMlAdvisoryBtn");
+            const filterCheckbox = document.getElementById("mlAttackOnlyFilter");
+            runBtn.disabled = !phase2CaseId;
+            runBtn.textContent = "Run ML Advisory";
+            filterCheckbox.checked = false;
+            filterCheckbox.disabled = true;
+
+            hideMlAdvisoryStatus();
+            document.getElementById("mlAdvisoryLoading").style.display = "none";
+            document.getElementById("mlAdvisoryResults").style.display = "none";
+            document.getElementById("mlAdvisoryTableBody").replaceChildren();
+            document.getElementById("mlLimitationsList").replaceChildren();
+        }
+
+        function showMlAdvisoryStatus(message, variant) {
+            const banner = document.getElementById("mlAdvisoryStatus");
+            banner.textContent = message;
+            banner.className = "ml-status-banner show ml-status-" + variant;
+        }
+
+        function hideMlAdvisoryStatus() {
+            const banner = document.getElementById("mlAdvisoryStatus");
+            banner.textContent = "";
+            banner.className = "ml-status-banner";
+        }
+
+        function classifyMlAdvisoryError(status, payload) {
+            const detail = payload && typeof payload === "object" ? payload.detail : null;
+            const detailObj = detail && typeof detail === "object" ? detail : null;
+            const mlCode = detailObj && typeof detailObj.ml_advisory_error === "string"
+                ? detailObj.ml_advisory_error
+                : "";
+            const valCode = detailObj && typeof detailObj.validation_error === "string"
+                ? detailObj.validation_error
+                : "";
+            const intCode = detailObj && typeof detailObj.integrity_error === "string"
+                ? detailObj.integrity_error
+                : "";
+            const rawMsg = detailObj && typeof detailObj.message === "string"
+                ? detailObj.message
+                : (typeof detail === "string" ? detail : "");
+
+            if (mlCode === "ml_not_enabled" || mlCode === "ml_not_approved") {
+                return {
+                    variant: "info",
+                    message: "ML advisory is not enabled or has not been approved by the server operator. Deterministic R-A through R-D forensic analysis remains fully available."
+                };
+            }
+            if (mlCode === "model_unavailable_or_invalid") {
+                const lower = rawMsg.toLowerCase();
+                if (lower.includes("sha-256") || lower.includes("mismatch") || lower.includes("corrupt") || lower.includes("size")) {
+                    return {
+                        variant: "error",
+                        message: "Model integrity verification failed. Advisory inference was blocked safely; deterministic R-A through R-D findings remain unaffected."
+                    };
+                }
+                return {
+                    variant: "warning",
+                    message: "The trusted ML model artifact is unavailable or missing on the server. Deterministic R-A through R-D findings remain unaffected."
+                };
+            }
+            if (status === 413 || mlCode === "event_limit_exceeded") {
+                return {
+                    variant: "warning",
+                    message: rawMsg || "Evidence exceeds the maximum event limit allowed for ML advisory inference."
+                };
+            }
+            if (status === 422 || valCode || mlCode === "unsupported_input" || mlCode === "feature_extraction_failed") {
+                return {
+                    variant: "warning",
+                    message: "Unsupported or invalid input format for ML advisory analysis. Only integrity-verified CSV evidence with the required analytical columns is supported."
+                };
+            }
+            if (status === 409 || intCode) {
+                return {
+                    variant: "error",
+                    message: "Evidence integrity verification failed; ML advisory analysis was blocked to protect forensic integrity."
+                };
+            }
+            if (status === 404) {
+                return {
+                    variant: "info",
+                    message: rawMsg || "No case or registered evidence was found for ML advisory analysis."
+                };
+            }
+            return {
+                variant: "error",
+                message: "ML advisory analysis could not be completed. Deterministic R-A through R-D findings remain available."
+            };
+        }
+
+        function getFilteredMlPredictions() {
+            const data = mlAdvisoryState.lastResponse;
+            if (!data || !Array.isArray(data.predictions)) {
+                return [];
+            }
+            const attackOnly = document.getElementById("mlAttackOnlyFilter").checked;
+            if (!attackOnly) {
+                return data.predictions;
+            }
+            return data.predictions.filter((item) => item && item.predicted_label === 1);
+        }
+
+        function renderMlAdvisoryTable() {
+            const data = mlAdvisoryState.lastResponse;
+            if (!data) return;
+
+            const filtered = getFilteredMlPredictions();
+            document.getElementById("mlShownCountNum").textContent = String(filtered.length);
+
+            const emptyEl = document.getElementById("mlAdvisoryEmpty");
+            const emptyDetailEl = document.getElementById("mlAdvisoryEmptyDetail");
+            const tableContainer = document.getElementById("mlAdvisoryTableContainer");
+            const tbody = document.getElementById("mlAdvisoryTableBody");
+            tbody.replaceChildren();
+
+            if (filtered.length === 0) {
+                tableContainer.style.display = "none";
+                emptyEl.style.display = "block";
+                const attackOnly = document.getElementById("mlAttackOnlyFilter").checked;
+                emptyDetailEl.textContent = attackOnly
+                    ? "No attack-associated advisory predictions were found. Uncheck the filter to view normal predictions."
+                    : "No scored events were returned for this case.";
+                return;
+            }
+
+            emptyEl.style.display = "none";
+            tableContainer.style.display = "block";
+
+            const totalPages = Math.max(1, Math.ceil(filtered.length / ML_ADVISORY_PAGE_SIZE));
+            if (mlAdvisoryState.currentPage > totalPages) {
+                mlAdvisoryState.currentPage = totalPages;
+            }
+            const startIdx = (mlAdvisoryState.currentPage - 1) * ML_ADVISORY_PAGE_SIZE;
+            const endIdx = Math.min(filtered.length, startIdx + ML_ADVISORY_PAGE_SIZE);
+            const pageItems = filtered.slice(startIdx, endIdx);
+
+            const fragment = document.createDocumentFragment();
+            pageItems.forEach((pred) => {
+                const ref = pred && pred.source_event_reference ? pred.source_event_reference : {};
+                const tr = document.createElement("tr");
+
+                // Col 1: Evidence / Event Reference
+                const tdRef = document.createElement("td");
+                const evStrong = document.createElement("strong");
+                evStrong.textContent = String(ref.evidence_id || "Unknown");
+                const evMeta = document.createElement("div");
+                evMeta.style.fontSize = "12px";
+                evMeta.style.color = "#666";
+                evMeta.textContent = "Event #" + String(ref.event_id ?? "N/A");
+                tdRef.appendChild(evStrong);
+                tdRef.appendChild(evMeta);
+                tr.appendChild(tdRef);
+
+                // Col 2: Timestamp
+                const tdTime = document.createElement("td");
+                tdTime.textContent = String(ref.timestamp || "N/A");
+                tr.appendChild(tdTime);
+
+                // Col 3: Source & Request summary (no raw evidence dump)
+                const tdReq = document.createElement("td");
+                const reqTop = document.createElement("div");
+                reqTop.textContent =
+                    String(ref.event_type || "N/A") + " " + String(ref.resource || "N/A");
+                const reqSub = document.createElement("div");
+                reqSub.style.fontSize = "12px";
+                reqSub.style.color = "#666";
+                const statusPart = ref.response_status != null ? "HTTP " + String(ref.response_status) : "Status N/A";
+                const bytesPart = ref.transfer_size != null ? String(ref.transfer_size) + " B" : "Bytes N/A";
+                reqSub.textContent =
+                    "Source: " + String(ref.source_ip || "N/A") + " • " + statusPart + " • " + bytesPart;
+                tdReq.appendChild(reqTop);
+                tdReq.appendChild(reqSub);
+                tr.appendChild(tdReq);
+
+                // Col 4: Predicted Class
+                const tdClass = document.createElement("td");
+                const badge = document.createElement("span");
+                const isAttack = pred.predicted_label === 1;
+                badge.className = "ml-pred-badge " + (isAttack ? "ml-pred-attack" : "ml-pred-normal");
+                badge.textContent = isAttack ? "attack_associated" : "normal";
+                tdClass.appendChild(badge);
+                tr.appendChild(tdClass);
+
+                // Col 5: Uncalibrated Model Score
+                const tdScore = document.createElement("td");
+                const scoreVal = typeof pred.model_score === "number" && Number.isFinite(pred.model_score)
+                    ? pred.model_score.toFixed(4)
+                    : "N/A";
+                const scoreStrong = document.createElement("strong");
+                scoreStrong.textContent = scoreVal;
+                const scoreHint = document.createElement("div");
+                scoreHint.style.fontSize = "11px";
+                scoreHint.style.color = "#666";
+                scoreHint.textContent = "Uncalibrated model score";
+                tdScore.appendChild(scoreStrong);
+                tdScore.appendChild(scoreHint);
+                tr.appendChild(tdScore);
+
+                fragment.appendChild(tr);
+            });
+            tbody.appendChild(fragment);
+
+            document.getElementById("mlPageInfo").textContent =
+                `Page ${mlAdvisoryState.currentPage} of ${totalPages} (showing ${startIdx + 1}-${endIdx} of ${filtered.length})`;
+            document.getElementById("mlPrevPageBtn").disabled = mlAdvisoryState.currentPage <= 1;
+            document.getElementById("mlNextPageBtn").disabled = mlAdvisoryState.currentPage >= totalPages;
+        }
+
+        function renderMlAdvisoryResponse(data) {
+            mlAdvisoryState.lastResponse = data;
+            mlAdvisoryState.currentPage = 1;
+
+            const model = data && data.model ? data.model : {};
+            const summary = data && data.summary ? data.summary : {};
+
+            document.getElementById("mlMetaModelId").textContent = String(model.model_id || "N/A");
+            document.getElementById("mlMetaModelVersion").textContent = String(model.model_version || "N/A");
+            document.getElementById("mlMetaFeatureSchema").textContent =
+                "v" + String(model.feature_schema_version || "1.0.0");
+            document.getElementById("mlMetaThreshold").textContent =
+                typeof model.decision_threshold === "number" ? model.decision_threshold.toFixed(2) : "N/A";
+            document.getElementById("mlMetaAdvisoryStatus").textContent =
+                data && data.advisory_only ? "Advisory Only (Read-Only)" : "Advisory Only";
+
+            document.getElementById("mlTotalEventsNum").textContent = String(summary.total_events_scored ?? 0);
+            document.getElementById("mlAttackCountNum").textContent = String(summary.attack_associated_count ?? 0);
+            document.getElementById("mlNormalCountNum").textContent = String(summary.normal_count ?? 0);
+
+            const limitations = Array.isArray(data.limitations) ? data.limitations : [];
+            const limList = document.getElementById("mlLimitationsList");
+            limList.replaceChildren();
+            limitations.forEach((item) => {
+                const li = document.createElement("li");
+                li.textContent = String(item);
+                limList.appendChild(li);
+            });
+            document.getElementById("mlLimitationsBox").style.display = limitations.length > 0 ? "block" : "none";
+
+            document.getElementById("mlAttackOnlyFilter").disabled = false;
+            document.getElementById("mlAdvisoryResults").style.display = "block";
+            renderMlAdvisoryTable();
+        }
+
+        async function runMlAdvisoryAnalysis() {
+            if (!phase2CaseId) {
+                showMlAdvisoryStatus("Please select a case first.", "info");
+                return;
+            }
+
+            const btn = document.getElementById("runMlAdvisoryBtn");
+            const loadingEl = document.getElementById("mlAdvisoryLoading");
+            const resultsEl = document.getElementById("mlAdvisoryResults");
+            const filterCheckbox = document.getElementById("mlAttackOnlyFilter");
+
+            btn.disabled = true;
+            btn.textContent = "Running ML Advisory...";
+            btn.setAttribute("aria-busy", "true");
+            filterCheckbox.disabled = true;
+            hideMlAdvisoryStatus();
+            resultsEl.style.display = "none";
+            loadingEl.style.display = "block";
+
+            try {
+                const response = await fetch(`/cases/${phase2CaseId}/ml-advisory`, {
+                    method: "POST"
+                });
+
+                let payload = null;
+                try {
+                    payload = await response.json();
+                } catch (_) {
+                    payload = null;
+                }
+
+                if (!response.ok) {
+                    const errInfo = classifyMlAdvisoryError(response.status, payload);
+                    showMlAdvisoryStatus(errInfo.message, errInfo.variant);
+                    return;
+                }
+
+                renderMlAdvisoryResponse(payload);
+                const scored = payload && payload.summary ? payload.summary.total_events_scored : 0;
+                const flagged = payload && payload.summary ? payload.summary.attack_associated_count : 0;
+                showMlAdvisoryStatus(
+                    `ML advisory complete: ${scored} events scored (${flagged} attack-associated). Deterministic R-A through R-D findings are unchanged.`,
+                    "success"
+                );
+            } catch (_) {
+                showMlAdvisoryStatus(
+                    "Unable to reach the ML advisory endpoint. Deterministic R-A through R-D findings remain unaffected.",
+                    "error"
+                );
+            } finally {
+                loadingEl.style.display = "none";
+                btn.disabled = !phase2CaseId;
+                btn.textContent = "Run ML Advisory";
+                btn.removeAttribute("aria-busy");
+            }
         }
 
         async function analyzeCase() {
