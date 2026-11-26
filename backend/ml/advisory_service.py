@@ -3,9 +3,11 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass
 import hashlib
+import ipaddress
 import math
 import os
 from pathlib import Path
+import re
 import threading
 from typing import Any, Mapping, Sequence
 
@@ -34,28 +36,183 @@ MAX_ADVISORY_EVENTS_HARD_CAP = 250_000
 
 CSV_DOMAIN_LIMITATION_NOTE = (
     "Advisory inference extracts the exact 13-feature FEATURE_SCHEMA v1.0.0 from "
-    "validated CSV evidence via backend.ml.features.extract_features(). Because the "
-    "model was trained on synthetic AIT-LDS v2.1 Apache HTTP access logs, CSV logs "
-    "from non-Apache or non-HTTP sources may experience domain shift; treat outputs "
-    "strictly as read-only advisory signals alongside deterministic rules R-A through R-D."
+    "validated Apache-style HTTP CSV evidence via backend.ml.features.extract_features(). "
+    "Evidence outside the validated Apache HTTP access-log domain is rejected before inference; "
+    "treat advisory outputs strictly as read-only signals alongside deterministic rules R-A through R-D."
 )
+
+SUPPORTED_HTTP_METHODS: frozenset[str] = frozenset(
+    {"GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS", "PATCH", "TRACE", "CONNECT"}
+)
+_UNSUPPORTED_EVENT_TYPE_PREFIXES: tuple[str, ...] = (
+    "PROCESS_",
+    "FILE_",
+    "USB_",
+    "NETWORK_",
+    "FIREWALL_",
+    "REGISTRY_",
+    "AUTH_",
+    "LOGIN",
+    "LOGOUT",
+    "SSH_",
+    "DNS_",
+    "KERNEL_",
+    "SERVICE_",
+    "SYSLOG",
+    "USER_",
+    "DISK_",
+    "DEVICE_",
+)
+_WINDOWS_OR_DEVICE_RESOURCE_RE = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\|USB[\\/])")
+
+
+def _is_valid_ip_address(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_valid_http_status(value: str) -> bool:
+    return len(value) == 3 and value.isascii() and value.isdigit() and 100 <= int(value) <= 599
+
+
+def _is_valid_http_resource(value: str) -> bool:
+    if not value or any(ch.isspace() for ch in value):
+        return False
+    if _WINDOWS_OR_DEVICE_RESOURCE_RE.match(value):
+        return False
+    return (
+        value == "*"
+        or value.startswith("/")
+        or value.startswith("http://")
+        or value.startswith("https://")
+    )
+
+
+def _is_explicitly_unsupported_event(event_type: str, resource: str) -> bool:
+    upper_type = event_type.upper()
+    if any(upper_type.startswith(prefix) for prefix in _UNSUPPORTED_EVENT_TYPE_PREFIXES):
+        return True
+    if _WINDOWS_OR_DEVICE_RESOURCE_RE.match(resource):
+        return True
+    return False
+
+
+def validate_apache_http_domain_compatibility(
+    evidence_code: str,
+    rows: Sequence[Mapping[str, str]],
+) -> None:
+    """Conservatively verify that all CSV rows conform to Apache-style HTTP access semantics.
+
+    Fails closed before ML inference for clearly unsupported host/OS/USB/network telemetry,
+    mixed-domain files, or ambiguous/unverifiable event schemas.
+    """
+    supported_count = 0
+    unsupported_count = 0
+    ambiguous_count = 0
+    unsupported_event_types: set[str] = set()
+    ambiguous_reasons: set[str] = set()
+
+    for row in rows:
+        event_type = (row.get("event_type") or row.get("event") or "").strip()
+        resource = (row.get("resource") or row.get("description") or "").strip()
+        source_ip = (row.get("source_ip") or row.get("source") or "").strip()
+        status = (row.get("status") or "").strip()
+
+        if _is_explicitly_unsupported_event(event_type, resource):
+            unsupported_count += 1
+            if event_type:
+                unsupported_event_types.add(event_type[:40])
+            continue
+
+        method_ok = event_type.upper() in SUPPORTED_HTTP_METHODS
+        status_ok = _is_valid_http_status(status)
+        resource_ok = _is_valid_http_resource(resource)
+        ip_ok = _is_valid_ip_address(source_ip)
+
+        if method_ok and status_ok and resource_ok and ip_ok:
+            supported_count += 1
+        else:
+            ambiguous_count += 1
+            if not method_ok:
+                ambiguous_reasons.add("non_http_event_type")
+            if not status_ok:
+                ambiguous_reasons.add("non_http_status_code")
+            if not resource_ok:
+                ambiguous_reasons.add("non_http_resource_path")
+            if not ip_ok:
+                ambiguous_reasons.add("non_ip_source_identifier")
+
+    if unsupported_count == 0 and ambiguous_count == 0 and supported_count > 0:
+        return
+
+    extra: dict[str, object] = {
+        "evidence_id": evidence_code,
+        "supported_http_events": supported_count,
+        "unsupported_domain_events": unsupported_count,
+        "ambiguous_events": ambiguous_count,
+        "supported_domain": "apache_http_access_log_v1",
+    }
+    if unsupported_event_types:
+        extra["observed_unsupported_event_types"] = sorted(unsupported_event_types)[:8]
+    if ambiguous_reasons:
+        extra["incompatibility_reasons"] = sorted(ambiguous_reasons)
+
+    if supported_count > 0:
+        raise MLAdvisoryError(
+            "mixed_event_domain",
+            "This evidence mixes Apache HTTP access events with event types outside the ML "
+            "model's validated Apache HTTP domain. ML advisory was blocked to prevent misleading "
+            "predictions; deterministic rule-based forensic analysis remains available.",
+            status_code=422,
+            extra=extra,
+        )
+    if unsupported_count > 0:
+        raise MLAdvisoryError(
+            "unsupported_event_domain",
+            "This evidence contains event types outside the ML model's validated Apache HTTP "
+            "domain (such as process, filesystem, USB, or firewall telemetry). Deterministic "
+            "rule-based forensic analysis remains available.",
+            status_code=422,
+            extra=extra,
+        )
+    raise MLAdvisoryError(
+        "ambiguous_event_domain",
+        "This evidence cannot be verified as compatible Apache-style HTTP access logs "
+        "(requires standard HTTP methods, 3-digit HTTP status codes, URI request paths, "
+        "and IP source addresses). Deterministic rule-based forensic analysis remains available.",
+        status_code=422,
+        extra=extra,
+    )
 
 
 class MLAdvisoryError(ValueError):
     """Structured fail-closed error for optional ML advisory inference."""
 
-    def __init__(self, code: str, message: str, *, status_code: int = 503) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        status_code: int = 503,
+        extra: Mapping[str, object] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.status_code = status_code
+        self.extra = dict(extra) if extra is not None else {}
 
     def to_detail(self) -> dict[str, object]:
-        return {
+        detail: dict[str, object] = {
             "ml_advisory_error": self.code,
             "message": self.message,
             "deterministic_analysis_available": True,
         }
+        detail.update(self.extra)
+        return detail
 
 
 @dataclass(frozen=True)
@@ -303,6 +460,8 @@ class MLAdvisoryService:
                     f"Evidence {ev_code} contains no event rows.",
                     status_code=422,
                 )
+
+            validate_apache_http_domain_compatibility(ev_code, rows)
 
             try:
                 feature_records = extract_features(

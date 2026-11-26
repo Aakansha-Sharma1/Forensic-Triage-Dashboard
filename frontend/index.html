@@ -1971,6 +1971,24 @@
                     message: rawMsg || "Evidence exceeds the maximum event limit allowed for ML advisory inference."
                 };
             }
+            if (mlCode === "unsupported_event_domain") {
+                return {
+                    variant: "warning",
+                    message: "This evidence contains event types outside the ML model's validated Apache HTTP domain. Rule-based forensic analysis remains available."
+                };
+            }
+            if (mlCode === "mixed_event_domain") {
+                return {
+                    variant: "warning",
+                    message: "This evidence mixes Apache HTTP events with event types outside the ML model's validated Apache HTTP domain. Rule-based forensic analysis remains available."
+                };
+            }
+            if (mlCode === "ambiguous_event_domain") {
+                return {
+                    variant: "warning",
+                    message: "This evidence could not be verified as compatible Apache HTTP access logs (requires HTTP methods, 3-digit status codes, URI paths, and IP sources). Rule-based forensic analysis remains available."
+                };
+            }
             if (status === 422 || valCode || mlCode === "unsupported_input" || mlCode === "feature_extraction_failed") {
                 return {
                     variant: "warning",
