@@ -62,6 +62,10 @@ app.add_middleware(
 
 app.include_router(workspace_router)
 
+_STATIC_DIR = Path(__file__).resolve().parent.parent / "frontend" / "static"
+if _STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
 
 class CaseCreate(BaseModel):
     case_number: str

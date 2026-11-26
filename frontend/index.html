@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Forensic Insight - Data Preparation</title>
+    <title>ForensicInsight 2.0 — Digital Forensic Investigation Platform</title>
+    <link rel="stylesheet" href="/static/styles/tokens.css">
+    <link rel="stylesheet" href="/static/styles/app.css">
     <style>
         * {
             margin: 0;
@@ -881,7 +883,16 @@
         }
     </style>
 </head>
-<body>
+<body class="fi-v2-active">
+    <!-- ForensicInsight 2.0 App Shell (Default Interface) -->
+    <div id="v2AppShell" class="fi-app"></div>
+
+    <!-- Preserved Classic Workflows (Accessible while M3-M6 views migrate) -->
+    <div id="legacyWorkspaceHost" class="fi-legacy-host" hidden>
+        <div class="fi-legacy-banner">
+            <span><strong>Classic Forensic Workflow</strong> — Active while Milestones M3–M6 migrate into the 2.0 Case Workspace.</span>
+            <button type="button" id="returnToV2Btn" class="fi-btn fi-btn-primary fi-btn-sm">Return to ForensicInsight 2.0</button>
+        </div>
     <div class="container">
         <header>
             <h1>🔬 Forensic Insight</h1>
@@ -3065,5 +3076,7 @@
             }
         };
     </script>
+    </div><!-- /#legacyWorkspaceHost -->
+    <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

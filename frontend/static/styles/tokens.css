@@ -1,0 +1,50 @@
+/* ForensicInsight 2.0 — Design Tokens (Dark Navy / Charcoal Forensic Theme) */
+:root {
+    /* Surfaces */
+    --fi-bg-canvas: #0b1120;
+    --fi-bg-sidebar: #080d1a;
+    --fi-bg-surface: #111827;
+    --fi-bg-surface-elevated: #1a2336;
+    --fi-bg-surface-hover: #212d45;
+    --fi-bg-input: #0f172a;
+
+    /* Borders */
+    --fi-border-subtle: #1f2937;
+    --fi-border-default: #2d3a52;
+    --fi-border-strong: #3f4f6d;
+
+    /* Typography */
+    --fi-text-primary: #f1f5f9;
+    --fi-text-secondary: #cbd5e1;
+    --fi-text-muted: #94a3b8;
+    --fi-font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --fi-font-mono: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
+
+    /* Brand & Semantic Accents (WCAG AA on dark surfaces) */
+    --fi-accent-primary: #3b82f6;
+    --fi-accent-primary-hover: #2563eb;
+    --fi-accent-primary-soft: rgba(59, 130, 246, 0.14);
+
+    --fi-accent-advisory: #818cf8;
+    --fi-accent-advisory-soft: rgba(129, 140, 248, 0.14);
+    --fi-accent-advisory-border: rgba(129, 140, 248, 0.4);
+
+    --fi-status-success: #34d399;
+    --fi-status-success-soft: rgba(52, 211, 153, 0.14);
+    --fi-status-warning: #fbbf24;
+    --fi-status-warning-soft: rgba(251, 191, 36, 0.14);
+    --fi-status-danger: #f87171;
+    --fi-status-danger-soft: rgba(248, 113, 113, 0.14);
+    --fi-status-info: #38bdf8;
+    --fi-status-info-soft: rgba(56, 189, 248, 0.14);
+
+    /* Layout & Radii */
+    --fi-sidebar-width: 252px;
+    --fi-topbar-height: 60px;
+    --fi-radius-sm: 6px;
+    --fi-radius-md: 10px;
+    --fi-radius-lg: 14px;
+    --fi-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --fi-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
+    --fi-focus-ring: 0 0 0 3px rgba(59, 130, 246, 0.55);
+}
