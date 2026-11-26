@@ -7,10 +7,11 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from uuid import uuid4
 from collections import defaultdict
+from typing import Annotated
 import traceback
 import tempfile
 
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -25,6 +26,7 @@ from .database import get_connection, initialize_database
 from .audit import append_audit_event, get_audit_history, verify_audit_chain
 from .rules import RULE_REGISTRY, calculate_rule_fingerprint, get_rule_metadata
 from .ml.advisory_service import MLAdvisoryError, ml_advisory_service
+from .workspace_api import router as workspace_router
 
 
 initialize_database()
@@ -36,13 +38,29 @@ app = FastAPI(
     version="1.0.0"
 )
 
+_DEFAULT_CORS_ORIGINS = [
+    "http://127.0.0.1:8000",
+    "http://localhost:8000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3000",
+]
+_raw_cors = os.environ.get("FORENSIC_INSIGHT_CORS_ORIGINS", "").strip()
+CORS_ALLOWED_ORIGINS = (
+    [origin.strip() for origin in _raw_cors.split(",") if origin.strip()]
+    if _raw_cors
+    else _DEFAULT_CORS_ORIGINS
+)
+CORS_ALLOW_CREDENTIALS = "*" not in CORS_ALLOWED_ORIGINS
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=CORS_ALLOWED_ORIGINS,
+    allow_credentials=CORS_ALLOW_CREDENTIALS,
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "Accept"],
 )
+
+app.include_router(workspace_router)
 
 
 class CaseCreate(BaseModel):
@@ -542,119 +560,219 @@ def get_finding_details(finding_id: str):
 
 
 @app.get("/cases/{case_id}/events")
-def get_case_events(case_id: int):
-    """Get all events from all evidence files for a case (for Phase 3 visualizations)."""
+def get_case_events(
+    case_id: int,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int | None, Query(ge=1, le=500)] = None,
+    q: str | None = None,
+    source_ip: str | None = None,
+    event_type: str | None = None,
+    status: str | None = None,
+    evidence_id: str | None = None,
+    only_flagged: bool = False,
+    sort_by: Annotated[str, Query(pattern="^(timestamp|source|event_type|status|bytes)$")] = "timestamp",
+    sort_order: Annotated[str, Query(pattern="^(asc|desc)$")] = "asc",
+):
+    """Get integrity-verified, searchable, paginated events from working CSV copies for a case."""
+    connection = get_connection()
     try:
-        connection = get_connection()
-        
-        # Verify case exists
         case = connection.execute(
             "SELECT id FROM cases WHERE id = ?",
-            (case_id,)
+            (case_id,),
         ).fetchone()
-        
         if not case:
-            connection.close()
             raise HTTPException(status_code=404, detail="Case not found")
-        
-        # Get all evidence for this case
+
         evidence_list = connection.execute(
-            "SELECT id, evidence_id, stored_filename FROM evidence WHERE case_id = ?",
-            (case_id,)
+            "SELECT id, evidence_id, stored_filename, sha256, file_type FROM evidence WHERE case_id = ? ORDER BY id ASC",
+            (case_id,),
         ).fetchall()
-        
+
+        findings_rows = connection.execute(
+            """
+            SELECT f.event_id, f.evidence_id, f.finding_id, f.reason, f.severity, f.rule_id
+            FROM findings f
+            JOIN evidence e ON f.evidence_id = e.id
+            WHERE e.case_id = ?
+            """,
+            (case_id,),
+        ).fetchall()
+    finally:
         connection.close()
-        
-        events = []
-        
-        # Read all events from all evidence files
-        for evidence_row in evidence_list:
-            try:
-                # Convert Row to dict-like access
-                ev_id = evidence_row[0]
-                ev_code = evidence_row[1]
-                stored_path = evidence_row[2]
-                
-                path = Path(stored_path)
-                if not path.exists():
+
+    # O(M) indexed lookup of findings by (evidence_db_id, event_id)
+    findings_by_key: dict[tuple[int, str], list[dict]] = defaultdict(list)
+    for f_row in findings_rows:
+        findings_by_key[(int(f_row[1]), str(f_row[0]))].append(
+            {
+                "finding_id": f_row[2],
+                "reason": f_row[3],
+                "severity": f_row[4],
+                "rule_id": f_row[5],
+            }
+        )
+
+    # Verify original + working integrity for every evidence item BEFORE reading any events.
+    verified_csv_sources: list[tuple[int, str, Path]] = []
+    for ev in evidence_list:
+        ev_id = int(ev[0])
+        ev_code = str(ev[1])
+        original_path = Path(str(ev[2]))
+        recorded_sha256 = str(ev[3])
+        file_type = str(ev[4] or "").lower()
+        working_path = WORKING_DIR / f"{ev_code}_working.csv"
+
+        verify_evidence_integrity(ev_code, original_path, working_path, recorded_sha256)
+        if file_type == ".csv":
+            verified_csv_sources.append((ev_id, ev_code, working_path))
+
+    events: list[dict] = []
+    source_stats: dict[str, dict] = {}
+    event_type_counts: dict[str, int] = defaultdict(int)
+
+    for ev_id, ev_code, working_path in verified_csv_sources:
+        try:
+            with open(working_path, "r", encoding="utf-8-sig", newline="") as f:
+                reader = csv.DictReader(f)
+                if reader.fieldnames is None:
                     continue
-                
-                with open(path, 'r', encoding='utf-8') as f:
-                    reader = csv.DictReader(f)
-                    if reader is None:
+                for idx, row in enumerate(reader):
+                    if row is None:
                         continue
-                    
-                    for idx, row in enumerate(reader):
-                        if row is None:
-                            continue
-                        
-                        event = {
-                            'event_id': str(idx),
-                            'evidence_id': ev_id,
-                            'evidence_code': ev_code,
-                            'timestamp': row.get('timestamp', ''),
-                            'source': row.get('source_ip', row.get('source', '')),
-                            'event_type': row.get('event_type', row.get('event', '')),
-                            'resource': row.get('resource', row.get('description', '')),
-                            'status': row.get('status', ''),
-                            'bytes': row.get('bytes', ''),
-                            'findings': []
+                    event_id_str = str(idx)
+                    ev_findings = findings_by_key.get((ev_id, event_id_str), [])
+                    src = (row.get("source_ip") or row.get("source") or "").strip()
+                    etype = (row.get("event_type") or row.get("event") or "").strip()
+                    res = (row.get("resource") or row.get("description") or "").strip()
+                    st = (row.get("status") or "").strip()
+                    b_raw = (row.get("bytes") or "").strip()
+                    ts = (row.get("timestamp") or "").strip()
+
+                    event = {
+                        "event_id": event_id_str,
+                        "evidence_id": ev_id,
+                        "evidence_code": ev_code,
+                        "timestamp": ts,
+                        "source": src,
+                        "event_type": etype,
+                        "resource": res,
+                        "status": st,
+                        "bytes": b_raw,
+                        "findings": ev_findings,
+                    }
+                    events.append(event)
+
+                    if etype:
+                        event_type_counts[etype] += 1
+                    src_key = src or "Unknown"
+                    entry = source_stats.get(src_key)
+                    if entry is None:
+                        entry = {
+                            "source": src_key,
+                            "event_count": 0,
+                            "failed_count": 0,
+                            "post_count": 0,
+                            "total_bytes": 0,
+                            "findings_count": 0,
                         }
-                        events.append(event)
-            except Exception:
-                # Log but continue processing other files
+                        source_stats[src_key] = entry
+                    entry["event_count"] += 1
+                    if st.isdigit() and 400 <= int(st) <= 599:
+                        entry["failed_count"] += 1
+                    if "POST" in etype.upper():
+                        entry["post_count"] += 1
+                    if b_raw.isdigit():
+                        entry["total_bytes"] += int(b_raw)
+                    entry["findings_count"] += len(ev_findings)
+        except (OSError, UnicodeDecodeError, csv.Error) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "validation_error": "malformed_csv",
+                    "evidence_id": ev_code,
+                    "message": f"Unable to read verified working CSV: {exc}",
+                },
+            ) from exc
+
+    total_events = len(events)
+
+    # Apply optional filters
+    q_norm = q.strip().lower() if q else ""
+    src_norm = source_ip.strip() if source_ip else ""
+    etype_norm = event_type.strip().upper() if event_type else ""
+    status_norm = status.strip() if status else ""
+    ev_norm = evidence_id.strip() if evidence_id else ""
+
+    filtered = events
+    if q_norm or src_norm or etype_norm or status_norm or ev_norm or only_flagged:
+        filtered = []
+        for ev in events:
+            if src_norm and ev["source"] != src_norm:
                 continue
-        
-        # Get all findings for this case
-        try:
-            connection2 = get_connection()
-            findings = connection2.execute(
-                """
-                SELECT f.event_id, f.evidence_id, f.finding_id, f.reason, f.severity
-                FROM findings f
-                JOIN evidence e ON f.evidence_id = e.id
-                WHERE e.case_id = ?
-                """,
-                (case_id,)
-            ).fetchall()
-            connection2.close()
-            
-            # Build map: (event_id, evidence_id) -> findings
-            for f_row in findings:
-                event_id_str = str(f_row[0])  # event_id
-                evidence_id_int = f_row[1]     # evidence_id
-                finding_id = f_row[2]
-                reason = f_row[3]
-                severity = f_row[4]
-                
-                # Attach to matching event
-                for event in events:
-                    if event['event_id'] == event_id_str and event['evidence_id'] == evidence_id_int:
-                        event['findings'].append({
-                            'finding_id': finding_id,
-                            'reason': reason,
-                            'severity': severity
-                        })
-        except Exception:
-            # If findings fetch fails, continue without them
-            pass
-        
-        # Sort by timestamp
-        try:
-            events.sort(key=lambda e: e.get('timestamp', '9999-99-99') or '9999-99-99')
-        except:
-            pass
-        
-        return {
-            'case_id': case_id,
-            'total_events': len(events),
-            'events': events
-        }
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error retrieving events: {str(e)}")
+            if etype_norm and ev["event_type"].upper() != etype_norm:
+                continue
+            if status_norm and ev["status"] != status_norm:
+                continue
+            if ev_norm and ev["evidence_code"] != ev_norm:
+                continue
+            if only_flagged and not ev["findings"]:
+                continue
+            if q_norm:
+                haystack = (
+                    f"{ev['evidence_code']} {ev['source']} {ev['event_type']} "
+                    f"{ev['resource']} {ev['status']} {ev['timestamp']}"
+                ).lower()
+                if q_norm not in haystack:
+                    continue
+            filtered.append(ev)
+
+    # Deterministic sorting
+    reverse = sort_order == "desc"
+    if sort_by == "bytes":
+        filtered.sort(
+            key=lambda e: int(e["bytes"]) if str(e["bytes"]).isdigit() else -1,
+            reverse=reverse,
+        )
+    elif sort_by == "timestamp":
+        filtered.sort(
+            key=lambda e: (e.get("timestamp") or "9999-99-99", e["evidence_id"], int(e["event_id"])),
+            reverse=reverse,
+        )
+    else:
+        filtered.sort(
+            key=lambda e: (str(e.get(sort_by) or "").lower(), e.get("timestamp") or ""),
+            reverse=reverse,
+        )
+
+    filtered_count = len(filtered)
+    if page_size is not None:
+        total_pages = max(1, (filtered_count + page_size - 1) // page_size)
+        start = (page - 1) * page_size
+        page_events = filtered[start : start + page_size]
+        effective_page_size = page_size
+    else:
+        # Backwards-compatible default for legacy clients (bounded at 10,000 rows)
+        max_unpaginated = 10_000
+        page_events = filtered[:max_unpaginated]
+        total_pages = 1
+        effective_page_size = len(page_events)
+
+    top_sources = sorted(
+        source_stats.values(),
+        key=lambda item: (-item["event_count"], item["source"]),
+    )[:50]
+
+    return {
+        "case_id": case_id,
+        "total_events": total_events,
+        "filtered_events": filtered_count,
+        "page": page,
+        "page_size": effective_page_size,
+        "total_pages": total_pages,
+        "events": page_events,
+        "source_summary": top_sources,
+        "event_type_counts": dict(sorted(event_type_counts.items())),
+    }
 
 
 @app.get("/")
@@ -1947,23 +2065,34 @@ def generate_case_report(case_id: int):
     connection = get_connection()
     try:
         pdf_path, pdf_sha256 = generate_pdf_report(case_id)
+        generated_at = datetime.now(timezone.utc).isoformat()
+        report_cursor = connection.execute(
+            """
+            INSERT INTO reports (case_id, filename, file_path, sha256, generated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (case_id, Path(pdf_path).name, pdf_path, pdf_sha256, generated_at),
+        )
+        report_id = report_cursor.lastrowid
+
         append_audit_event(
             connection,
             action_type="REPORT_GENERATED",
             case_id=case_id,
             evidence_id=None,
             outcome="SUCCESS",
-            metadata={"filename": Path(pdf_path).name, "sha256": pdf_sha256},
+            metadata={"report_id": report_id, "filename": Path(pdf_path).name, "sha256": pdf_sha256},
         )
         connection.commit()
         
         return {
             "message": "Report generated successfully",
             "report": {
+                "id": report_id,
                 "filename": Path(pdf_path).name,
                 "path": pdf_path,
                 "sha256": pdf_sha256,
-                "generated_at": datetime.now(timezone.utc).isoformat()
+                "generated_at": generated_at
             }
         }
 

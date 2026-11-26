@@ -60,7 +60,7 @@ def reset_isolated_state(isolated_app):
     connection.execute("PRAGMA foreign_keys = OFF")
     connection.execute("DROP TRIGGER IF EXISTS prevent_audit_update")
     connection.execute("DROP TRIGGER IF EXISTS prevent_audit_delete")
-    for table in ("findings", "chain_of_custody", "evidence", "cases", "audit_events"):
+    for table in ("reports", "findings", "chain_of_custody", "evidence", "cases", "audit_events"):
         connection.execute(f"DELETE FROM {table}")
     connection.execute("DELETE FROM sqlite_sequence")
     connection.execute(
